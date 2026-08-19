@@ -33,6 +33,8 @@ export interface UIHooks {
   saveSession(): void;
   loadSession(): void;
   knobLabels(): { label: string; value: string; norm: number }[];
+  learnKnob(i: number): void;
+  learning(): number | null;
   currentChordLabel(): string | null;
   heldNotes(): Set<number>;
 }
@@ -224,6 +226,8 @@ export class UI {
     const hw = el('div', 'hw');
     for (let i = 0; i < 8; i++) {
       const box = el('div', 'k');
+      box.title = 'click, then turn a knob on the MiniLab to bind it here';
+      box.onclick = () => h.learnKnob(i);
       const lab = el('span'); lab.textContent = `K${i + 1}`;
       const val = el('b');
       const bar = el('div', 'bar');
@@ -239,6 +243,7 @@ export class UI {
       `MiniLab 3: keys play · pads drum (BEAT) / pick scale (CHORD) / drive tape (TAPE) · 8 knobs = the panel above · faders: volume, delay, reverb, swing<br>` +
       `big knob (device in DAW mode, ⇧+Pad3): turn = switch mode · click = play/stop · ⇧+turn = key root / track / tape speed · ⇧+click = rec arm<br>` +
       `● TAPE records the loop from any mode — jam in CHORD or BEAT and punch in (<kbd>⇧T</kbd>)<br>` +
+      `knob mapping wrong? click a K-box below, then turn the knob you want bound there — it sticks<br>` +
       `no controller? <kbd>A</kbd>–<kbd>;</kbd> piano · <kbd>W E T Y U</kbd> black keys · <kbd>1</kbd>–<kbd>8</kbd> pads · <kbd>space</kbd> play · <kbd>⇧R</kbd> record · <kbd>←</kbd><kbd>→</kbd> mode · <kbd>Z</kbd>/<kbd>X</kbd> octave · shift-click a BASS cell to cycle its scale degree`;
 
     this.root.append(header, tabs, chordPanel, beatPanel, tapePanel, hw, footer);
@@ -291,6 +296,16 @@ export class UI {
     if (!b) return;
     b.classList.add('hit');
     window.setTimeout(() => b.classList.remove('hit'), 120);
+  }
+
+  /** Flash the K-box a physical knob just drove, so mappings are visible. */
+  knobFlash(i: number) {
+    const k = this.knobEls[i];
+    if (!k) return;
+    k.box.classList.add('hit');
+    window.setTimeout(() => k.box.classList.remove('hit'), 180);
+    // knob moves change state outside the store on some paths — refresh values
+    this.update();
   }
 
   /** Cheap full refresh of stateful chrome — called on store changes. */
@@ -351,11 +366,13 @@ export class UI {
 
     // knob mirror
     const knobs = h.knobLabels();
+    const learning = h.learning();
     knobs.forEach((k, i) => {
       const K = this.knobEls[i];
       K.lab.textContent = `K${i + 1} ${k.label}`;
-      K.val.textContent = k.value;
+      K.val.textContent = learning === i ? 'turn a knob…' : k.value;
       K.bar.style.width = `${Math.round(k.norm * 100)}%`;
+      K.box.classList.toggle('learn', learning === i);
     });
   }
 

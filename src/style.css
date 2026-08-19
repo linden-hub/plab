@@ -206,7 +206,11 @@ label.ctl b { color: var(--ink); font-size: 11px; letter-spacing: 1px; }
   min-width: 74px;
   font-size: 10px;
   color: var(--dim);
+  cursor: pointer;
+  transition: border-color 0.15s;
 }
+.hw .k.hit { border-color: var(--accent); }
+.hw .k.learn { border-color: var(--rec); animation: pulse 1s infinite; }
 .hw .k b { display: block; color: var(--ink); font-size: 12px; margin-top: 2px; }
 .hw .k .bar { height: 3px; background: var(--mist); border-radius: 2px; margin-top: 4px; overflow: hidden; }
 .hw .k .bar i { display: block; height: 100%; background: var(--accent); }

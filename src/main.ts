@@ -60,6 +60,12 @@ async function boot() {
   let selTrack = 0;
   const held = new Set<number>();
 
+  // Knob remapping (MIDI-learn): click a K-box, turn a knob to bind it.
+  // Keyed by source port + CC; survives reloads.
+  let knobRemap: Record<string, number> = {};
+  try { knobRemap = JSON.parse(localStorage.getItem('plab.knobmap.v1') ?? '{}'); } catch { /* fresh */ }
+  let learnTarget: number | null = null;
+
   // ---- UI ----
   const ui = new UI({
     state: () => store.state,
@@ -140,6 +146,12 @@ async function boot() {
       });
     },
     knobLabels: () => knobReadout(store.state),
+    learnKnob(i) {
+      learnTarget = learnTarget === i ? null : i;
+      ui.toast(learnTarget === null ? 'learn cancelled' : `turn a knob on the MiniLab to bind it to K${i + 1}`);
+      ui.update();
+    },
+    learning: () => learnTarget,
     currentChordLabel: () => chord.current?.label ?? null,
     heldNotes: () => held,
   }, app);
@@ -313,20 +325,42 @@ async function boot() {
   const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
   function onKnobAbs(i: number, value: number) { knobDefs()[i]?.set(value / 127); }
 
-  // Relative tuning: ~1.2% per detent for continuous params (fast spins get a
+  // Relative tuning: ~0.6% per detent for continuous params (fast spins get a
   // capped speed bonus from the Mackie magnitude); quantized params move
   // exactly one position per detent.
-  const REL_STEP = 0.012;
+  const REL_STEP = 0.006;
   function onKnobRel(i: number, delta: number) {
     const d = knobDefs()[i];
     if (!d || delta === 0) return;
+    ui.knobFlash(i);
     if (d.steps) {
       const idx = Math.round(d.get() * (d.steps - 1)) + (delta > 0 ? 1 : -1);
       d.set(Math.max(0, Math.min(d.steps - 1, idx)) / (d.steps - 1));
     } else {
-      const capped = Math.sign(delta) * Math.min(8, Math.abs(delta));
+      const capped = Math.sign(delta) * Math.min(4, Math.abs(delta));
       d.set(clamp01(d.get() + capped * REL_STEP));
     }
+  }
+
+  /** Route any encoder-ish CC through the remap table; true if consumed. */
+  function routeKnobCC(source: string, cc: number, value: number, kind: 'abs' | 'rel', defaultSlot: number): boolean {
+    const key = `${source}:${cc}`;
+    if (learnTarget !== null) {
+      knobRemap[key] = learnTarget;
+      localStorage.setItem('plab.knobmap.v1', JSON.stringify(knobRemap));
+      ui.toast(`bound that knob to K${learnTarget + 1}`);
+      learnTarget = null;
+      ui.update();
+      return true;
+    }
+    const slot = knobRemap[key] ?? defaultSlot;
+    if (kind === 'abs') onKnobAbs(slot, value);
+    else onKnobRel(slot, relOrVpotDelta(source, value));
+    return true;
+  }
+
+  function relOrVpotDelta(source: string, value: number): number {
+    return source === 'mcu' ? vpotDelta(value) : relDelta(value);
   }
 
   function applyFader(f: number, v: number) {
@@ -406,7 +440,7 @@ async function boot() {
     // Its note messages are Mackie button states, NOT piano keys — drop them.
     if (e.source === 'mcu') {
       if (e.type === 'cc' && e.a >= VPOT_FIRST_CC && e.a <= VPOT_LAST_CC) {
-        onKnobRel(e.a - VPOT_FIRST_CC, vpotDelta(e.b));
+        routeKnobCC('mcu', e.a, e.b, 'rel', e.a - VPOT_FIRST_CC);
       } else if (e.type === 'cc') {
         console.debug('[plab] unmapped MCU CC', e.channel, e.a, e.b);
       }
@@ -424,12 +458,12 @@ async function boot() {
       noteOff(e.a);
     } else if (e.type === 'cc') {
       const k = knobIndex(e.a);
-      if (k >= 0) { onKnobAbs(k, e.b); return; }
+      if (k >= 0) { routeKnobCC('main', e.a, e.b, 'abs', k); return; }
       const f = faderIndex(e.a);
       if (f >= 0) { applyFader(f, e.b / 127); return; }
       // DAW-mode surface (Shift+Pad3 on the device)
       const dk = dawKnobIndex(e.a);
-      if (dk >= 0) { onKnobRel(dk, relDelta(e.b)); return; }
+      if (dk >= 0) { routeKnobCC('main', e.a, e.b, 'rel', dk); return; }
       const df = dawFaderIndex(e.a);
       if (df >= 0) { applyFader(df, e.b / 127); return; }
       // main encoder
