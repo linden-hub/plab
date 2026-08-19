@@ -266,20 +266,22 @@ async function boot() {
   // ---- knob/fader mapping per mode ----
   // Each knob is a normalized get/set pair, so absolute encoders (Arturia
   // mode) and relative encoders (DAW mode) drive the same parameters.
-  interface KnobDef { get(): number; set(v: number): void }
+  // `steps` marks quantized params: relative turns move one position per
+  // detent instead of accumulating fractions that rounding would swallow.
+  interface KnobDef { get(): number; set(v: number): void; steps?: number }
 
   function knobDefs(): KnobDef[] {
     const s = store.state;
     const P = (p: Partial<AppState>) => store.patch(p);
     if (s.mode === 'chord') {
       return [
-        { get: () => s.extension / 2, set: (v) => P({ extension: Math.round(v * 2) }) },
+        { get: () => s.extension / 2, set: (v) => P({ extension: Math.round(v * 2) }), steps: 3 },
         { get: () => s.spread, set: (v) => P({ spread: v }) },
-        { get: () => s.inversion / 3, set: (v) => P({ inversion: Math.round(v * 3) }) },
-        { get: () => (s.chordOctave / 12 + 2) / 4, set: (v) => P({ chordOctave: (Math.round(v * 4) - 2) * 12 }) },
+        { get: () => s.inversion / 3, set: (v) => P({ inversion: Math.round(v * 3) }), steps: 4 },
+        { get: () => (s.chordOctave / 12 + 2) / 4, set: (v) => P({ chordOctave: (Math.round(v * 4) - 2) * 12 }), steps: 5 },
         { get: () => s.brightness, set: (v) => P({ brightness: v }) },
         { get: () => s.release, set: (v) => P({ release: v }) },
-        { get: () => [4, 2, 1].indexOf(s.arpRate) / 2, set: (v) => P({ arpRate: [4, 2, 1][Math.min(2, Math.floor(v * 3))] }) },
+        { get: () => [4, 2, 1].indexOf(s.arpRate) / 2, set: (v) => P({ arpRate: [4, 2, 1][Math.min(2, Math.floor(v * 3))] }), steps: 3 },
         { get: () => s.vibe, set: (v) => P({ vibe: v }) },
       ];
     }
@@ -299,7 +301,7 @@ async function boot() {
     return [
       { get: () => (s.tapeSpeed + 2) / 4, set: (v) => P({ tapeSpeed: Math.round((v * 4 - 2) * 20) / 20 }) },
       { get: () => (s.overdubDecay - 0.3) / 0.7, set: (v) => P({ overdubDecay: 0.3 + v * 0.7 }) },
-      { get: () => [1, 2, 4, 8].indexOf(s.tapeBars) / 3, set: (v) => P({ tapeBars: [1, 2, 4, 8][Math.min(3, Math.floor(v * 4))] }) },
+      { get: () => [1, 2, 4, 8].indexOf(s.tapeBars) / 3, set: (v) => P({ tapeBars: [1, 2, 4, 8][Math.min(3, Math.floor(v * 4))] }), steps: 4 },
       { get: () => s.vibe, set: (v) => P({ vibe: v }) },
       { get: () => s.delaySend, set: (v) => P({ delaySend: v }) },
       { get: () => s.reverbSend, set: (v) => P({ reverbSend: v }) },
@@ -310,9 +312,21 @@ async function boot() {
 
   const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
   function onKnobAbs(i: number, value: number) { knobDefs()[i]?.set(value / 127); }
+
+  // Relative tuning: ~1.2% per detent for continuous params (fast spins get a
+  // capped speed bonus from the Mackie magnitude); quantized params move
+  // exactly one position per detent.
+  const REL_STEP = 0.012;
   function onKnobRel(i: number, delta: number) {
     const d = knobDefs()[i];
-    if (d) d.set(clamp01(d.get() + delta * 0.04));
+    if (!d || delta === 0) return;
+    if (d.steps) {
+      const idx = Math.round(d.get() * (d.steps - 1)) + (delta > 0 ? 1 : -1);
+      d.set(Math.max(0, Math.min(d.steps - 1, idx)) / (d.steps - 1));
+    } else {
+      const capped = Math.sign(delta) * Math.min(8, Math.abs(delta));
+      d.set(clamp01(d.get() + capped * REL_STEP));
+    }
   }
 
   function applyFader(f: number, v: number) {
