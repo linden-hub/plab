@@ -106,6 +106,7 @@ export class AudioEngine {
 
   getVibe() { return this.vibeAmount; }
 
+  setLoopVolume(v: number) { this.loopIn.gain.setTargetAtTime(v, this.now, 0.03); }
   setDelaySend(v: number) { this.delaySend.gain.setTargetAtTime(v * 0.8, this.now, 0.03); }
   setDelayTime(seconds: number) { this.delay.delayTime.setTargetAtTime(Math.max(0.02, seconds), this.now, 0.1); }
   setReverbSend(v: number) { this.reverbSend.gain.setTargetAtTime(v * 0.9, this.now, 0.03); }

@@ -89,14 +89,7 @@ async function boot() {
     selectTrack: (i) => { selTrack = i; store.touch('grid'); },
     selectedTrack: () => selTrack,
     playhead: () => (store.state.playing ? seq.playhead : -1),
-    tapeRecord() {
-      if (looper.recState !== 'idle') { looper.cancelRecord(); return; }
-      const s = store.state;
-      if (!s.playing) togglePlay(); // tape syncs to the transport grid
-      looper.decayAmount = s.overdubDecay;
-      const barDur = clock.barDur();
-      looper.record(barDur * s.tapeBars, clock.nextBarTime());
-    },
+    tapeRecord: () => tapeRecordToggle(),
     tapeUndo: () => looper.popLayer(),
     tapeClear: () => looper.clear(),
     tapeInfo: () => ({
@@ -167,6 +160,7 @@ async function boot() {
     if (changed.has('bpm')) engine.setDelayTime(60 / s.bpm * 0.75); // dotted 8th
     if (changed.has('tapeSpeed')) looper.setSpeed(s.tapeSpeed);
     if (changed.has('overdubDecay')) looper.decayAmount = s.overdubDecay;
+    if (changed.has('loopVolume')) engine.setLoopVolume(s.loopVolume);
     if (changed.has('brightness') || changed.has('release')) chord.applyMacros();
     if (changed.has('mode')) syncHardware(s);
     session.scheduleAutosave(s);
@@ -182,6 +176,7 @@ async function boot() {
     engine.setMasterVolume(s.masterVolume);
     engine.setDelayTime(60 / s.bpm * 0.75);
     looper.decayAmount = s.overdubDecay;
+    engine.setLoopVolume(s.loopVolume);
     chord.applyMacros();
   }
 
@@ -240,7 +235,7 @@ async function boot() {
       else store.patch({ arpOn: !s.arpOn });
     } else {
       // tape transport on pads
-      if (i === 0) tapeRecordViaPad();
+      if (i === 0) tapeRecordToggle();
       else if (i === 1) looper.popLayer();
       else if (i === 2) store.patch({ tapeSpeed: -store.state.tapeSpeed });
       else if (i === 3) store.patch({ tapeSpeed: 1 });
@@ -248,12 +243,13 @@ async function boot() {
     }
   }
 
-  function tapeRecordViaPad() {
+  // Chompi-style: press = start recording NOW; press again = that exact span
+  // becomes the loop (or ends the overdub). No bar grid, no transport needed.
+  function tapeRecordToggle() {
+    if (looper.recState === 'recording') { looper.stopRecord(); return; }
     if (looper.recState !== 'idle') { looper.cancelRecord(); return; }
-    const s = store.state;
-    if (!s.playing) togglePlay();
-    looper.decayAmount = s.overdubDecay;
-    looper.record(clock.barDur() * s.tapeBars, clock.nextBarTime());
+    looper.decayAmount = store.state.overdubDecay;
+    looper.record();
   }
 
   // ---- mode switching + hardware feedback ----
@@ -313,7 +309,7 @@ async function boot() {
     return [
       { get: () => (s.tapeSpeed + 2) / 4, set: (v) => P({ tapeSpeed: Math.round((v * 4 - 2) * 20) / 20 }) },
       { get: () => (s.overdubDecay - 0.3) / 0.7, set: (v) => P({ overdubDecay: 0.3 + v * 0.7 }) },
-      { get: () => [1, 2, 4, 8].indexOf(s.tapeBars) / 3, set: (v) => P({ tapeBars: [1, 2, 4, 8][Math.min(3, Math.floor(v * 4))] }), steps: 4 },
+      { get: () => s.loopVolume, set: (v) => P({ loopVolume: v }) },
       { get: () => s.vibe, set: (v) => P({ vibe: v }) },
       { get: () => s.delaySend, set: (v) => P({ delaySend: v }) },
       { get: () => s.reverbSend, set: (v) => P({ reverbSend: v }) },
@@ -424,7 +420,7 @@ async function boot() {
     return [
       { label: 'SPEED', value: '×' + s.tapeSpeed.toFixed(2), norm: (s.tapeSpeed + 2) / 4 },
       { label: 'DECAY', value: pct(s.overdubDecay), norm: (s.overdubDecay - 0.3) / 0.7 },
-      { label: 'BARS', value: String(s.tapeBars), norm: [1, 2, 4, 8].indexOf(s.tapeBars) / 3 },
+      { label: 'LOOP VOL', value: pct(s.loopVolume), norm: s.loopVolume },
       { label: 'VIBE', value: pct(s.vibe), norm: s.vibe },
       { label: 'DELAY', value: pct(s.delaySend), norm: s.delaySend },
       { label: 'REVERB', value: pct(s.reverbSend), norm: s.reverbSend },
@@ -490,7 +486,7 @@ async function boot() {
     const key = ev.key.toLowerCase();
     if (ev.shiftKey) {
       if (key === 'r') { store.patch({ recording: !store.state.recording }); return; }
-      if (key === 't') { tapeRecordViaPad(); return; }
+      if (key === 't') { tapeRecordToggle(); return; }
     }
     if (key in KEYMAP && !ev.shiftKey) { noteOn(KEYMAP[key] + kbOctave * 12, 0.9); return; }
     if (key >= '1' && key <= '8') { padHit(Number(key) - 1, 1); return; }

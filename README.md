@@ -9,9 +9,10 @@ audio — three instruments fused into one, driven by an **Arturia MiniLab 3**:
 - **BEAT** — a [Dirtywave M8](https://dirtywave.com/)-inspired step sequencer: 8 tracks × 16
   steps, finger-drum the pads and live-record, swing, per-track pitch/decay/volume. The bass
   track auto-snaps to the current key.
-- **TAPE** — a [CHOMPI](https://www.chompiclub.com/)-inspired looper: records the master bus
-  (everything you play, in any mode) or the mic, bar-quantized, unlimited overdubs with decay
-  (Frippertronics), varispeed incl. reverse, and keys replay the loop repitched chromatically.
+- **TAPE** — a [CHOMPI](https://www.chompiclub.com/)-inspired free-form looper: press record,
+  play (any mode, or the mic), press stop — that exact take becomes the loop at its own
+  length, playing instantly. Unlimited overdubs with decay (Frippertronics), varispeed incl.
+  reverse, chords playable on top, and JAMMI mode repitches the loop across the keys.
 
 One harmonic brain (key + scale) drives all three modes. One **vibe** macro moves the whole
 output from clean to warbly cassette (wow/flutter + saturation + lowpass).
@@ -54,7 +55,7 @@ If the browser grants SysEx, mode switches recolor the pads and write to the OLE
 
 - **Autosave**: everything (grid, params, key, loop audio) persists locally; reload the tab
   and you're exactly where you left off. `SAVE`/`LOAD` manage named slots.
-- **WAV·LOOP** — the tape loop, bar-exact, tiles cleanly as a REAPER loop item.
+- **WAV·LOOP** — the tape loop, cut exactly at its own length, tiles cleanly as a REAPER loop item.
 - **WAV·BEAT** — the pattern rendered offline (2 bars, dry).
 - **MIDI** — a .mid with tempo, the drum/bass grid, and your chord performance (recorded
   while the transport runs in CHORD mode), ready to drive REAPER's own instruments.

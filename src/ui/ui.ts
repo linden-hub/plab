@@ -196,10 +196,6 @@ export class UI {
     const tapeRow = el('div', 'row');
     const recBtn = button('● RECORD', () => h.tapeRecord());
     this.els.tapeRec = recBtn;
-    const barsSel = document.createElement('select');
-    for (const b of [1, 2, 4, 8]) barsSel.append(new Option(`${b} bar${b > 1 ? 's' : ''}`, String(b)));
-    barsSel.onchange = () => h.patch({ tapeBars: Number(barsSel.value) });
-    this.els.barsSel = barsSel as unknown as HTMLElement;
     const speedIn = document.createElement('input');
     speedIn.type = 'range'; speedIn.min = '-2'; speedIn.max = '2'; speedIn.step = '0.05';
     speedIn.oninput = () => h.patch({ tapeSpeed: Number(speedIn.value) });
@@ -213,12 +209,12 @@ export class UI {
     const jammiBtn = button('JAMMI KEYS', () => h.patch({ jammi: !h.state().jammi }));
     jammiBtn.title = 'on: keys repitch the loop · off: keys play chords over it';
     this.els.jammiBtn = jammiBtn;
-    tapeRow.append(recBtn, ctl('LENGTH', barsSel), ctl('SPEED', speedIn), ctl('OVERDUB DECAY', decayIn),
+    tapeRow.append(recBtn, ctl('SPEED', speedIn), ctl('OVERDUB DECAY', decayIn),
       micBtn, jammiBtn, el('span', 'spacer'),
       button('UNDO', () => h.tapeUndo()),
       button('CLEAR', () => h.tapeClear()));
     const tapeHint = el('div', 'row');
-    tapeHint.innerHTML = `<span style="color:var(--dim);font-size:11px">keys play chords over the loop (JAMMI flips them to repitch it, C4 = original) · ● TAPE in the header records from any mode — play CHORD or BEAT and punch in</span>`;
+    tapeHint.innerHTML = `<span style="color:var(--dim);font-size:11px">free-form tape: press record, play, press stop — that exact take becomes the loop, at its own length · overdubs punch in the moment you press · keys play chords over the loop (JAMMI flips them to repitch it, C4 = original) · ● TAPE in the header works from any mode</span>`;
     tapePanel.append(reels, tapeRow, tapeHint, this.buildKeyboard());
     this.els.tapePanel = tapePanel;
 
@@ -352,15 +348,15 @@ export class UI {
     tnames.forEach((t) => t.classList.toggle('sel', Number((t as HTMLElement).dataset.track) === h.selectedTrack()));
 
     // tape chrome
-    (this.els.barsSel as unknown as HTMLSelectElement).value = String(s.tapeBars);
     (this.els.speedIn as unknown as HTMLInputElement).value = String(s.tapeSpeed);
     (this.els.decayIn as unknown as HTMLInputElement).value = String(s.overdubDecay);
     this.els.micBtn.className = h.micOn() ? 'lit' : '';
     this.els.jammiBtn.className = s.jammi ? 'lit' : '';
     const t = h.tapeInfo();
-    this.els.tapeRec.className = t.recState === 'recording' ? 'rec-lit' : t.recState === 'armed' ? 'lit' : '';
-    this.els.tapeRec.textContent = t.recState === 'recording' ? '● RECORDING' : t.recState === 'armed' ? '● ARMED…' : t.hasLoop ? '● OVERDUB' : '● RECORD';
-    this.els.tapeHdr.className = t.recState === 'recording' ? 'rec-lit' : t.recState === 'armed' ? 'lit' : '';
+    this.els.tapeRec.className = t.recState === 'recording' ? 'rec-lit' : '';
+    this.els.tapeRec.textContent = t.recState === 'recording' ? '■ STOP' : t.hasLoop ? '● OVERDUB' : '● RECORD';
+    this.els.tapeHdr.className = t.recState === 'recording' ? 'rec-lit' : '';
+    this.els.tapeHdr.textContent = t.recState === 'recording' ? '■ TAPE' : '● TAPE';
     this.els.layerBox.innerHTML = '';
     for (let i = 0; i < t.layers; i++) this.els.layerBox.appendChild(el('div', 'layer-chip'));
 
@@ -418,8 +414,7 @@ export class UI {
       });
       const st = h.tapeInfo();
       this.els.tapeStatus.textContent =
-        st.recState === 'recording' ? 'recording…'
-        : st.recState === 'armed' ? 'waiting for the bar…'
+        st.recState === 'recording' ? (st.hasLoop ? 'overdubbing…' : 'recording… press again to set the loop')
         : st.hasLoop ? `${st.layers} layer${st.layers === 1 ? '' : 's'} · ×${st.speed.toFixed(2)}`
         : 'empty tape';
       this.els.tapeStatus.className = 'tape-status' + (st.recState === 'recording' ? ' rec' : '');

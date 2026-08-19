@@ -48,9 +48,9 @@ export interface AppState {
   trackParams: TrackParams[];
 
   // Tape mode
-  tapeBars: number;         // 1|2|4|8
   tapeSpeed: number;        // -2..2 (negative = reverse)
   overdubDecay: number;     // 0..1 — how much old layers fade per overdub
+  loopVolume: number;       // 0..1 — level of the whole loop playback
   jammi: boolean;           // true = keys repitch the loop; false = keys play chords over it
 
   // Master FX
@@ -83,9 +83,9 @@ export function defaultState(): AppState {
     ),
     bassSteps: Array.from({ length: NUM_STEPS }, () => -1),
     trackParams: Array.from({ length: NUM_TRACKS }, () => ({ volume: 0.8, pitch: 0, decay: 0.5 })),
-    tapeBars: 2,
     tapeSpeed: 1,
     overdubDecay: 0.85,
+    loopVolume: 1,
     jammi: false,
     vibe: 0.15,
     delaySend: 0.1,

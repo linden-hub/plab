@@ -7,7 +7,8 @@
 export interface LoopLayer {
   buffer: AudioBuffer;
   gain: GainNode;
-  level: number;   // authoritative gain value (AudioParam.value doesn't track ramps)
+  level: number;        // authoritative gain value (AudioParam.value doesn't track ramps)
+  phaseOffset: number;  // loop phase (sec) this buffer's first sample was recorded at
   source: AudioBufferSourceNode | null;
 }
 
@@ -19,6 +20,7 @@ class PlabRecorder extends AudioWorkletProcessor {
     this.port.onmessage = (e) => {
       const m = e.data;
       if (m.cmd === 'arm') { this.startT = m.start; this.endT = m.end; this.chunks = []; }
+      if (m.cmd === 'setEnd') { if (this.startT >= 0) this.endT = m.end; }
       if (m.cmd === 'cancel') { this.startT = -1; this.chunks = []; }
     };
   }
@@ -38,7 +40,7 @@ class PlabRecorder extends AudioWorkletProcessor {
     return true;
   }
   flush() {
-    this.port.postMessage({ done: true, chunks: this.chunks });
+    this.port.postMessage({ done: true, chunks: this.chunks, start: this.startT, end: this.endT });
     this.startT = -1; this.chunks = [];
   }
 }
@@ -62,7 +64,9 @@ export class Looper {
   private phaseTime = 0;
 
   private mixCache: AudioBuffer | null = null;
-  private pendingEnd = 0;
+
+  /** Safety cap for an open-ended first recording. */
+  static readonly MAX_RECORD_SEC = 120;
 
   constructor(
     private ctx: AudioContext,
@@ -82,7 +86,7 @@ export class Looper {
     });
     this.recordTapIn.connect(this.node);
     this.node.port.onmessage = (e) => {
-      if (e.data.done) this.commit(e.data.chunks as [Float32Array, Float32Array][]);
+      if (e.data.done) this.commit(e.data.chunks as [Float32Array, Float32Array][], e.data.start, e.data.end);
     };
   }
 
@@ -110,29 +114,27 @@ export class Looper {
   }
 
   /**
-   * Arm a recording. First recording defines the loop (lengthSec); overdubs
-   * always record exactly one loop, punched in at the next loop boundary.
+   * Chompi-style free-form recording: starts NOW, no bar grid.
+   * - No loop yet: open-ended — stopRecord() (or the safety cap) sets the
+   *   length, and that exact span becomes the loop, playing immediately.
+   * - Loop exists: overdub punches in immediately, auto-stops after one loop
+   *   length (stopRecord() earlier leaves a shorter, silence-padded layer).
    */
-  record(lengthSec: number, quantizeStart: number) {
+  record() {
     if (this.recState !== 'idle') return;
-    let start: number;
-    let dur: number;
-    if (this.loopDur === 0) {
-      start = quantizeStart;
-      dur = lengthSec;
-    } else {
-      start = this.nextLoopBoundary();
-      dur = this.loopDur;
-    }
-    this.pendingEnd = start + dur;
-    this.node.port.postMessage({ cmd: 'arm', start, end: this.pendingEnd });
-    this.recState = 'armed';
+    const start = this.ctx.currentTime + 0.03;
+    const end = this.loopDur === 0
+      ? start + Looper.MAX_RECORD_SEC
+      : start + this.loopDur;
+    this.node.port.postMessage({ cmd: 'arm', start, end });
+    this.recState = 'recording';
     this.onChange();
-    // flip armed → recording for the UI at punch-in
-    const waitMs = Math.max(0, (start - this.ctx.currentTime) * 1000);
-    window.setTimeout(() => {
-      if (this.recState === 'armed') { this.recState = 'recording'; this.onChange(); }
-    }, waitMs);
+  }
+
+  /** Punch out — the worklet slices sample-accurately at this moment. */
+  stopRecord() {
+    if (this.recState !== 'recording') return;
+    this.node.port.postMessage({ cmd: 'setEnd', end: this.ctx.currentTime });
   }
 
   cancelRecord() {
@@ -141,20 +143,32 @@ export class Looper {
     this.onChange();
   }
 
-  private commit(chunks: [Float32Array, Float32Array][]) {
+  private commit(chunks: [Float32Array, Float32Array][], startT: number, endT: number) {
     const total = chunks.reduce((n, c) => n + c[0].length, 0);
-    if (total < 128) { this.recState = 'idle'; this.onChange(); return; }
-
-    const buf = this.ctx.createBuffer(2, total, this.ctx.sampleRate);
-    const L = buf.getChannelData(0), R = buf.getChannelData(1);
-    let off = 0;
-    for (const [l, r] of chunks) { L.set(l, off); R.set(r, off); off += l.length; }
+    if (total < 512) { this.recState = 'idle'; this.onChange(); return; }
 
     const isFirst = this.loopDur === 0;
+    const sr = this.ctx.sampleRate;
+    // Overdubs are padded with silence to exactly one loop so every layer tiles.
+    const len = isFirst ? total : Math.round(this.loopDur * sr);
+    const buf = this.ctx.createBuffer(2, len, sr);
+    const L = buf.getChannelData(0), R = buf.getChannelData(1);
+    let off = 0;
+    for (const [l, r] of chunks) {
+      const n = Math.min(l.length, len - off);
+      if (n <= 0) break;
+      L.set(l.subarray(0, n), off);
+      R.set(r.subarray(0, n), off);
+      off += n;
+    }
+
+    let phaseOffset = 0;
     if (isFirst) {
       this.loopDur = buf.duration;
-      this.phase0 = 0;
-      this.phaseTime = this.pendingEnd;
+      this.phase0 = 0;          // loop phase 0 = the moment recording started
+      this.phaseTime = endT;    // ...which comes around again right at punch-out
+    } else {
+      phaseOffset = this.phaseAt(startT);
     }
 
     // Overdub decay: every existing layer steps back as a new one lands.
@@ -166,9 +180,9 @@ export class Looper {
 
     const gain = this.ctx.createGain();
     gain.connect(this.loopOut);
-    const layer: LoopLayer = { buffer: buf, gain, level: 1, source: null };
+    const layer: LoopLayer = { buffer: buf, gain, level: 1, phaseOffset, source: null };
     this.layers.push(layer);
-    this.startLayer(layer, Math.max(this.ctx.currentTime, this.pendingEnd));
+    this.startLayer(layer, Math.max(this.ctx.currentTime + 0.02, endT));
 
     this.mixCache = null;
     this.recState = 'idle';
@@ -183,10 +197,12 @@ export class Looper {
     src.buffer = this.speed < 0 ? reversed(this.ctx, layer.buffer) : layer.buffer;
     src.loop = true;
     src.playbackRate.value = Math.max(0.05, Math.abs(this.speed));
-    let offset = this.phaseAt(at);
-    if (this.speed < 0) offset = layer.buffer.duration - offset;
+    const dur = layer.buffer.duration;
+    // position inside THIS buffer = loop phase minus where this layer punched in
+    let offset = (((this.phaseAt(at) - layer.phaseOffset) % dur) + dur) % dur;
+    if (this.speed < 0) offset = dur - offset;
     src.connect(layer.gain);
-    src.start(at, Math.max(0, Math.min(offset, layer.buffer.duration - 0.001)));
+    src.start(at, Math.max(0, Math.min(offset, dur - 0.001)));
     layer.source = src;
   }
 
@@ -247,8 +263,9 @@ export class Looper {
       for (const layer of this.layers) {
         const g = layer.level;
         const d = layer.buffer.getChannelData(Math.min(ch, layer.buffer.numberOfChannels - 1));
+        const shift = Math.round(layer.phaseOffset * this.ctx.sampleRate);
         const n = Math.min(len, d.length);
-        for (let i = 0; i < n; i++) o[i] += d[i] * g;
+        for (let i = 0; i < n; i++) o[(i + shift) % len] += d[i] * g;
       }
     }
     this.mixCache = out;
@@ -270,7 +287,7 @@ export class Looper {
   }
 
   /** Restore layers from a saved session. */
-  restore(buffers: AudioBuffer[], gains: number[], loopDur: number) {
+  restore(buffers: AudioBuffer[], gains: number[], phaseOffsets: number[], loopDur: number) {
     this.clear();
     if (!buffers.length) return;
     this.loopDur = loopDur;
@@ -280,7 +297,13 @@ export class Looper {
       const gain = this.ctx.createGain();
       gain.gain.value = gains[i] ?? 1;
       gain.connect(this.loopOut);
-      const layer: LoopLayer = { buffer: buffers[i], gain, level: gains[i] ?? 1, source: null };
+      const layer: LoopLayer = {
+        buffer: buffers[i],
+        gain,
+        level: gains[i] ?? 1,
+        phaseOffset: phaseOffsets[i] ?? 0,
+        source: null,
+      };
       this.layers.push(layer);
       this.startLayer(layer, this.phaseTime);
     }
