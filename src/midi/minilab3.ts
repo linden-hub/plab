@@ -39,6 +39,16 @@ export function dawFaderIndex(cc: number): number { return MINILAB3.dawFaderCCs.
 /** Relative binary-offset encoder value → signed delta (64 = no move). */
 export function relDelta(value: number): number { return value - 64; }
 
+// In DAW mode the 8 encoders speak Mackie on the MCU/HUI port: V-Pots,
+// CC 16–23, relative two's-complement-ish (bit 6 set = counterclockwise).
+export const VPOT_FIRST_CC = 16;
+export const VPOT_LAST_CC = 23;
+
+export function vpotDelta(value: number): number {
+  const mag = value & 0x3f;
+  return (value & 0x40) ? -mag : mag;
+}
+
 // ---- SysEx (all messages use the Arturia header F0 00 20 6B 7F 42 … F7) ----
 
 const HDR = [0xf0, 0x00, 0x20, 0x6b, 0x7f, 0x42];

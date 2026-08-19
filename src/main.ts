@@ -8,7 +8,7 @@ import { Sequencer, BASS_TRACK } from './sequencer/sequencer';
 import { ChordMode } from './modes/chord';
 import { Looper } from './looper/looper';
 import { MidiManager } from './midi/midi';
-import { MINILAB3, padIndex, knobIndex, faderIndex, dawKnobIndex, dawFaderIndex, relDelta, padColorSysex, oledTextSysex } from './midi/minilab3';
+import { MINILAB3, padIndex, knobIndex, faderIndex, dawKnobIndex, dawFaderIndex, relDelta, VPOT_FIRST_CC, VPOT_LAST_CC, vpotDelta, padColorSysex, oledTextSysex } from './midi/minilab3';
 import { SessionManager } from './persist/session';
 import { encodeWav, download, renderPattern } from './export/wav';
 import { exportMidi } from './export/midi';
@@ -388,6 +388,16 @@ async function boot() {
   // ---- MIDI wiring ----
   midi.onStatus(() => { ui.update(); syncHardware(store.state); });
   midi.onMessage((e) => {
+    // MCU/HUI port: only the DAW-mode encoders (Mackie V-Pots) matter here.
+    // Its note messages are Mackie button states, NOT piano keys — drop them.
+    if (e.source === 'mcu') {
+      if (e.type === 'cc' && e.a >= VPOT_FIRST_CC && e.a <= VPOT_LAST_CC) {
+        onKnobRel(e.a - VPOT_FIRST_CC, vpotDelta(e.b));
+      } else if (e.type === 'cc') {
+        console.debug('[plab] unmapped MCU CC', e.channel, e.a, e.b);
+      }
+      return;
+    }
     if (e.type === 'noteon') {
       if (e.channel === MINILAB3.padChannel) {
         const i = padIndex(e.a);
@@ -415,7 +425,7 @@ async function boot() {
       if (e.a === MINILAB3.mainShiftClickCC) { if (e.b > 63) store.patch({ recording: !store.state.recording }); return; }
       if (e.a === MINILAB3.shiftCC) return;
       if (e.a === MINILAB3.modCC) { store.patch({ vibe: e.b / 127 }); return; }
-      console.debug('[plab] unmapped CC', e.channel, e.a, e.b);
+      console.debug('[plab] unmapped CC', e.source, e.channel, e.a, e.b);
     }
   });
   await midi.init();
