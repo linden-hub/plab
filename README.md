@@ -1,20 +1,26 @@
 # PLAYLAB
 
 An early software prototype of a playful music & sound-design workstation for video-game
-audio — three instruments fused into one, driven by an **Arturia MiniLab 3**:
+audio, driven by an **Arturia MiniLab 3**. The architecture: a **global tape looper** that is
+always listening, and **four keyboards** — what the 25 keys *are* at any moment:
 
+- **SYNTH** — plain chromatic keys with selectable presets (warm / pluck / bass).
 - **CHORD** — a [Nopia](https://nopia.io/)-inspired harmony instrument: keys play *scale
   degrees*, so wrong notes are structurally impossible. Extensions dial (triad → 7th → 9th),
   voicing spread, inversions, auto-bass, clock-synced arp.
-- **BEAT** — a [Dirtywave M8](https://dirtywave.com/)-inspired step sequencer: 8 tracks × 16
+- **JAMMI** — [CHOMPI](https://www.chompiclub.com/)-inspired sampler keys: one sample spread
+  chromatically (C4 = original). The sample is the tape itself, a loaded WAV, or a take
+  recorded straight off the mic into the keys.
+- **DRUMS** — a [Dirtywave M8](https://dirtywave.com/)-inspired step sequencer: 8 tracks × 16
   steps, finger-drum the pads and live-record, swing, per-track pitch/decay/volume. The bass
   track auto-snaps to the current key.
-- **TAPE** — a [CHOMPI](https://www.chompiclub.com/)-inspired free-form looper: press record,
-  play (any mode, or the mic), press stop — that exact take becomes the loop at its own
-  length, playing instantly. Unlimited overdubs with decay (Frippertronics), varispeed incl.
-  reverse, chords playable on top, and JAMMI mode repitches the loop across the keys.
 
-One harmonic brain (key + scale) drives all three modes. One **vibe** macro moves the whole
+**The tape** ([CHOMPI](https://www.chompiclub.com/) LOOPI-inspired) sits above all of it:
+hold record while you play *anything*, release, and that exact take loops at its own length,
+layered over every other take, drifting freely (no bar grid, Frippertronics fade, varispeed
+incl. reverse). Pads always finger-drum regardless of keyboard.
+
+One harmonic brain (key + scale) drives every keyboard. One **vibe** macro moves the whole
 output from clean to warbly cassette (wow/flutter + saturation + lowpass).
 
 ## Run it
@@ -28,28 +34,27 @@ Open the printed URL in **Chrome** (Web MIDI required), click **press start** (b
 gesture before audio), and plug in the MiniLab 3 — it's auto-detected, hot-plug safe.
 
 No controller? Full computer-keyboard fallback: `A`–`;` piano (`W E T Y U` black keys),
-`1`–`8` pads, `space` play, `⇧R` record-arm, `←`/`→` switch modes, `Z`/`X` octave.
+`1`–`8` pads, `space` play, hold `⇧T` record loop, `⇧R` record-arm, `←`/`→` switch keyboards,
+`Z`/`X` octave.
 
-## MiniLab 3 mapping (factory Arturia mode)
+## MiniLab 3 mapping (put the device in DAW mode: Shift+Pad3)
 
-| Control | CHORD | BEAT | TAPE |
-|---|---|---|---|
-| Keys | diatonic chords by degree (black key = +1 extension) | scale-locked bass, live | chords over the loop (JAMMI: repitch the loop, C4 = original) |
-| Pads 1–8 | 1–6 scale · 7 bass · 8 arp | finger-drum the 8 tracks (records when armed) | 1 record/overdub · 2 undo · 3 reverse · 4 speed reset |
-| Knobs 1–8 | ext · spread · inv · oct · bright · release · arp · vibe | bpm · swing · vol · pitch · decay · vibe · delay · reverb | speed · decay · bars · vibe · delay · reverb · master · bright |
-| Faders 1–4 | master · delay · reverb · swing (all modes) | | |
-| Mod strip | vibe (all modes) | | |
+- **HOLD button = the record-loop button.** Hold it while you play — on any keyboard —
+  release, and the take loops. **Shift+HOLD = undo the last loop.**
+- **Big knob**: turn = switch keyboard · click = play/stop · Shift+turn = key root (SYNTH,
+  CHORD) / selected track (DRUMS) / tape speed (JAMMI) · Shift+click = rec-arm the grid.
+- **Pads 1–8**: always the drum kit; they write into the step grid when ● REC is armed.
+- **Faders 1–4**: master · delay · reverb · swing. **Mod strip**: vibe.
+- **Knobs 1–8** per keyboard:
+  - SYNTH: bright · release · vibe · delay · reverb · loop vol · tape speed · fade
+  - CHORD: ext · spread · inv · oct · bright · release · arp · vibe
+  - JAMMI: tape speed · fade · loop vol · vibe · delay · reverb · master · bright
+  - DRUMS: bpm · swing · track vol · track pitch · track decay · vibe · delay · reverb
 
-**Recording works from any mode**: the header's **● TAPE** button (or `⇧T`) punches the loop
-in wherever you are — jam in CHORD or BEAT, record, then export WAV·LOOP.
-
-**Hands-free navigation with the big knob** — put the device in DAW mode (Shift+Pad3):
-turn = switch mode, click = play/stop, Shift+turn = key root (CHORD) / track (BEAT) / tape
-speed (TAPE), Shift+click = record arm. In DAW mode the 8 encoders and 4 faders keep working
-(relative CCs are handled); in factory Arturia mode the big knob only browses Analog Lab and
-sends nothing, so use DAW mode if you want it.
-
-If the browser grants SysEx, mode switches recolor the pads and write to the OLED.
+Both device modes work (Arturia-mode absolute CCs and DAW-mode relative/Mackie encoders are
+handled), but the big knob and Shift only speak in DAW mode. If a knob lands on the wrong
+function, click a K-box on screen and turn the knob to rebind it. If the browser grants
+SysEx, keyboard switches recolor the pads and write to the OLED.
 
 ## Sessions & DAW handoff (REAPER)
 

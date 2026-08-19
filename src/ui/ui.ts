@@ -1,7 +1,8 @@
 // PLAYLAB UI — minimalist monochrome chrome; color marks what's alive.
-// One render() builds the DOM; update() + a rAF loop keep it honest.
+// The tape strip is always on screen; tabs switch which INSTRUMENT the keys
+// are. One render() builds the DOM; update() + a rAF loop keep it honest.
 
-import type { AppState, Mode } from '../state';
+import type { AppState, Keyboard, SynthPresetName } from '../state';
 import { NUM_STEPS, NUM_TRACKS, TRACK_NAMES } from '../state';
 import { NOTE_NAMES, SCALE_LIST } from '../theory/harmony';
 
@@ -10,7 +11,8 @@ export interface UIHooks {
   noteOn(note: number, vel: number): void;
   noteOff(note: number): void;
   padHit(i: number, vel: number): void;
-  setMode(m: Mode): void;
+  padRelease(i: number): void;
+  setKeyboard(k: Keyboard): void;
   togglePlay(): void;
   toggleRec(): void;
   patch(p: Partial<AppState>): void;
@@ -18,8 +20,7 @@ export interface UIHooks {
   selectTrack(i: number): void;
   selectedTrack(): number;
   playhead(): number;
-  padRelease(i: number): void;
-  // tape (hold-to-record: start on press, stop on release)
+  // global tape (hold-to-record: start on press, stop on release)
   tapeRecordStart(): void;
   tapeRecordStop(): void;
   tapeUndo(): void;
@@ -27,6 +28,13 @@ export interface UIHooks {
   tapeInfo(): { layers: number; recState: string; speed: number; hasLoop: boolean; loopSec: number };
   toggleMic(): void;
   micOn(): boolean;
+  // jammi sample source
+  jammiUseTape(): void;
+  jammiLoadFile(f: File): void;
+  jammiRecordStart(): void;
+  jammiRecordStop(): void;
+  jammiSource(): string;
+  jammiRecording(): boolean;
   // header extras
   midiStatus(): { connected: boolean; name: string | null };
   exportLoopWav(): void;
@@ -46,11 +54,17 @@ export interface UIHooks {
 const KB_LOW = 48;
 const KB_KEYS = 25;
 
+const KEYBOARDS: [Keyboard, string, string][] = [
+  ['synth', 'SYNTH', 'plain keys'],
+  ['chord', 'CHORD', 'harmony instrument'],
+  ['jammi', 'JAMMI', 'sampler keys'],
+  ['drums', 'DRUMS', 'kit + step grid'],
+];
+
 export class UI {
   private root: HTMLElement;
   private els: Record<string, HTMLElement> = {};
   private cells: HTMLElement[][] = [];
-  private keyEls = new Map<number, HTMLElement>();
   private padEls: HTMLElement[] = [];
   private knobEls: { box: HTMLElement; val: HTMLElement; bar: HTMLElement; lab: HTMLElement }[] = [];
   private toastEl: HTMLElement;
@@ -84,6 +98,7 @@ export class UI {
     const transport = el('div', 'transport');
     const play = button('▶ PLAY', () => h.togglePlay());
     const rec = button('● REC', () => h.toggleRec());
+    rec.title = 'arm the step grid: pads write into it while playing';
     this.els.play = play; this.els.rec = rec;
     const bpmWrap = el('div', 'bpm');
     const bpmIn = document.createElement('input');
@@ -91,14 +106,10 @@ export class UI {
     bpmIn.oninput = () => h.patch({ bpm: Number(bpmIn.value) });
     const bpmLab = el('span');
     this.els.bpmLab = bpmLab;
-    (this.els.bpmIn as unknown as HTMLInputElement) = bpmIn as unknown as HTMLElement & HTMLInputElement;
+    this.els.bpmIn = bpmIn as unknown as HTMLElement;
     bpmWrap.append(bpmLab, bpmIn);
-    const tapeHdr = button('● TAPE', () => {});
-    tapeHdr.title = 'HOLD to record the tape loop from any mode (hold ⇧T)';
-    holdToRecord(tapeHdr, h);
-    this.els.tapeHdr = tapeHdr;
-    transport.append(bpmWrap, play, rec, tapeHdr,
-      button('WAV·LOOP', () => h.exportLoopWav()),
+    transport.append(bpmWrap, play, rec,
+      button('WAV·TAPE', () => h.exportLoopWav()),
       button('WAV·BEAT', () => h.exportBeatWav()),
       button('MIDI', () => h.exportMidiFile()),
       button('SAVE', () => h.saveSession()),
@@ -106,27 +117,58 @@ export class UI {
     );
     header.append(logo, midiPill, transport);
 
-    // ---- tabs ----
+    // ---- global tape strip (always visible) ----
+    const tape = el('div', 'tapebar');
+    const recBtn = button('● HOLD TO RECORD', () => {});
+    recBtn.title = 'hold (or hold the MiniLab HOLD button) while you play, release to drop the loop';
+    hold(recBtn, () => h.tapeRecordStart(), () => h.tapeRecordStop());
+    this.els.tapeRec = recBtn;
+    const tapeStatus = el('span', 'tape-status');
+    this.els.tapeStatus = tapeStatus;
+    const layerBox = el('span', 'layers');
+    this.els.layerBox = layerBox;
+
+    const speedIn = slider(-2, 2, 0.05, (v) => h.patch({ tapeSpeed: v }));
+    this.els.speedIn = speedIn as unknown as HTMLElement;
+    const decayIn = slider(0.3, 1, 0.01, (v) => h.patch({ overdubDecay: v }));
+    this.els.decayIn = decayIn as unknown as HTMLElement;
+    const loopVolIn = slider(0, 1, 0.01, (v) => h.patch({ loopVolume: v }));
+    this.els.loopVolIn = loopVolIn as unknown as HTMLElement;
+    const micBtn = button('MIC', () => h.toggleMic());
+    micBtn.title = 'record the microphone into loops too';
+    this.els.micBtn = micBtn;
+
+    tape.append(recBtn, tapeStatus, layerBox, el('span', 'spacer'),
+      ctl('SPEED', speedIn), ctl('FADE', decayIn), ctl('LOOP VOL', loopVolIn),
+      micBtn, button('UNDO', () => h.tapeUndo()), button('CLEAR', () => h.tapeClear()));
+
+    // ---- keyboard tabs ----
     const tabs = el('div', 'tabs');
-    const tabDefs: [Mode, string, string][] = [
-      ['chord', 'CHORD', 'harmony instrument'],
-      ['beat', 'BEAT', 'step sequencer'],
-      ['tape', 'TAPE', 'looper'],
-    ];
-    for (const [m, name, sub] of tabDefs) {
-      const b = button('', () => h.setMode(m));
+    for (const [k, name, sub] of KEYBOARDS) {
+      const b = button('', () => h.setKeyboard(k));
       b.innerHTML = `${name}<span class="sub">${sub}</span>`;
-      b.dataset.mode = m;
+      b.dataset.kb = k;
       tabs.appendChild(b);
     }
     this.els.tabs = tabs;
 
-    // ---- chord panel ----
+    // ---- SYNTH panel ----
+    const synthPanel = el('div', 'panel');
+    const presetRow = el('div', 'row');
+    for (const p of ['warm', 'pluck', 'bass'] as SynthPresetName[]) {
+      const b = button(p.toUpperCase(), () => h.patch({ synthPreset: p }));
+      b.dataset.preset = p;
+      presetRow.appendChild(b);
+    }
+    this.els.presetRow = presetRow;
+    synthPanel.append(presetRow, this.buildKeyboard());
+    this.els.synthPanel = synthPanel;
+
+    // ---- CHORD panel ----
     const chordPanel = el('div', 'panel');
     const chordNow = el('div', 'chord-now empty');
     chordNow.textContent = 'play a key…';
     this.els.chordNow = chordNow;
-
     const keyRow = el('div', 'row');
     const chips = el('div', 'keychips');
     NOTE_NAMES.forEach((n, i) => {
@@ -143,12 +185,34 @@ export class UI {
     const arpT = button('ARP', () => h.patch({ arpOn: !h.state().arpOn }));
     this.els.bassT = bassT; this.els.arpT = arpT;
     keyRow.append(chips, scaleSel, el('span', 'spacer'), bassT, arpT);
-
     chordPanel.append(chordNow, keyRow, this.buildKeyboard());
     this.els.chordPanel = chordPanel;
 
-    // ---- beat panel ----
-    const beatPanel = el('div', 'panel');
+    // ---- JAMMI panel ----
+    const jammiPanel = el('div', 'panel');
+    const srcRow = el('div', 'row');
+    const srcLabel = el('span', 'jammi-src');
+    this.els.jammiSrc = srcLabel;
+    const useTape = button('USE TAPE', () => h.jammiUseTape());
+    this.els.useTape = useTape;
+    const fileIn = document.createElement('input');
+    fileIn.type = 'file';
+    fileIn.accept = 'audio/*';
+    fileIn.style.display = 'none';
+    fileIn.onchange = () => { if (fileIn.files?.[0]) h.jammiLoadFile(fileIn.files[0]); fileIn.value = ''; };
+    const loadBtn = button('LOAD WAV', () => fileIn.click());
+    const jamRec = button('● HOLD TO SAMPLE', () => {});
+    jamRec.title = 'hold while you play or speak (enable MIC for the microphone) — release puts the take on the keys';
+    hold(jamRec, () => h.jammiRecordStart(), () => h.jammiRecordStop());
+    this.els.jamRec = jamRec;
+    srcRow.append(srcLabel, el('span', 'spacer'), useTape, loadBtn, fileIn, jamRec);
+    const jammiHint = el('div', 'row');
+    jammiHint.innerHTML = `<span style="color:var(--dim);font-size:11px">keys replay the sample repitched chromatically · C4 = original pitch · with no sample loaded, keys play the tape itself</span>`;
+    jammiPanel.append(srcRow, jammiHint, this.buildKeyboard());
+    this.els.jammiPanel = jammiPanel;
+
+    // ---- DRUMS panel ----
+    const drumsPanel = el('div', 'panel');
     const grid = el('div', 'grid');
     this.cells = [];
     for (let tr = 0; tr < NUM_TRACKS; tr++) {
@@ -167,15 +231,13 @@ export class UI {
       this.cells.push(row);
     }
     const beatRow = el('div', 'row');
-    const swingIn = document.createElement('input');
-    swingIn.type = 'range'; swingIn.min = '0'; swingIn.max = '1'; swingIn.step = '0.01';
-    swingIn.oninput = () => h.patch({ swing: Number(swingIn.value) });
+    const swingIn = slider(0, 1, 0.01, (v) => h.patch({ swing: v }));
     this.els.swingIn = swingIn as unknown as HTMLElement;
     beatRow.append(ctl('SWING', swingIn), el('span', 'spacer'),
       button('CLEAR GRID', () => {
         const g = h.state().grid;
         for (const row of g) for (const c of row) c.on = false;
-        h.patch({}); h.toggleCell(-1, -1, false); // trigger redraw path
+        h.toggleCell(-1, -1, false);
       }));
     const pads = el('div', 'pads');
     for (let i = 0; i < 8; i++) {
@@ -186,45 +248,8 @@ export class UI {
       pads.appendChild(b);
       this.padEls.push(b);
     }
-    beatPanel.append(grid, beatRow, pads);
-    this.els.beatPanel = beatPanel;
-
-    // ---- tape panel ----
-    const tapePanel = el('div', 'panel');
-    const reels = el('div', 'reels');
-    const reelL = this.buildReel(); const reelR = this.buildReel();
-    const tapeStatus = el('div', 'tape-status');
-    this.els.tapeStatus = tapeStatus;
-    const layerBox = el('div', 'layers');
-    this.els.layerBox = layerBox;
-    reels.append(reelL, tapeStatus, el('span', 'spacer'), layerBox, reelR);
-
-    const tapeRow = el('div', 'row');
-    const recBtn = button('● RECORD', () => {});
-    recBtn.title = 'HOLD to record — release to set the loop';
-    holdToRecord(recBtn, h);
-    this.els.tapeRec = recBtn;
-    const speedIn = document.createElement('input');
-    speedIn.type = 'range'; speedIn.min = '-2'; speedIn.max = '2'; speedIn.step = '0.05';
-    speedIn.oninput = () => h.patch({ tapeSpeed: Number(speedIn.value) });
-    this.els.speedIn = speedIn as unknown as HTMLElement;
-    const decayIn = document.createElement('input');
-    decayIn.type = 'range'; decayIn.min = '0.3'; decayIn.max = '1'; decayIn.step = '0.01';
-    decayIn.oninput = () => h.patch({ overdubDecay: Number(decayIn.value) });
-    this.els.decayIn = decayIn as unknown as HTMLElement;
-    const micBtn = button('MIC', () => h.toggleMic());
-    this.els.micBtn = micBtn;
-    const jammiBtn = button('JAMMI KEYS', () => h.patch({ jammi: !h.state().jammi }));
-    jammiBtn.title = 'on: keys repitch the loop · off: keys play chords over it';
-    this.els.jammiBtn = jammiBtn;
-    tapeRow.append(recBtn, ctl('SPEED', speedIn), ctl('OVERDUB DECAY', decayIn),
-      micBtn, jammiBtn, el('span', 'spacer'),
-      button('UNDO', () => h.tapeUndo()),
-      button('CLEAR', () => h.tapeClear()));
-    const tapeHint = el('div', 'row');
-    tapeHint.innerHTML = `<span style="color:var(--dim);font-size:11px">every take is its own loop: HOLD record (button, pad 1, or ⇧T) while you play, release — that exact take loops at its own length, layered over the others, drifting freely · keys play chords on top (JAMMI flips them to repitch the tape, C4 = original)</span>`;
-    tapePanel.append(reels, tapeRow, tapeHint, this.buildKeyboard());
-    this.els.tapePanel = tapePanel;
+    drumsPanel.append(grid, beatRow, pads);
+    this.els.drumsPanel = drumsPanel;
 
     // ---- hardware mirror ----
     const hw = el('div', 'hw');
@@ -244,13 +269,12 @@ export class UI {
 
     const footer = el('footer');
     footer.innerHTML =
-      `MiniLab 3: keys play · pads drum (BEAT) / pick scale (CHORD) / drive tape (TAPE) · 8 knobs = the panel above · faders: volume, delay, reverb, swing<br>` +
-      `big knob (device in DAW mode, ⇧+Pad3): turn = switch mode · click = play/stop · ⇧+turn = key root / track / tape speed · ⇧+click = rec arm<br>` +
-      `● TAPE records the loop from any mode — jam in CHORD or BEAT and punch in (<kbd>⇧T</kbd>)<br>` +
-      `knob mapping wrong? click a K-box below, then turn the knob you want bound there — it sticks<br>` +
-      `no controller? <kbd>A</kbd>–<kbd>;</kbd> piano · <kbd>W E T Y U</kbd> black keys · <kbd>1</kbd>–<kbd>8</kbd> pads · <kbd>space</kbd> play · <kbd>⇧R</kbd> record · <kbd>←</kbd><kbd>→</kbd> mode · <kbd>Z</kbd>/<kbd>X</kbd> octave · shift-click a BASS cell to cycle its scale degree`;
+      `MiniLab 3 (DAW mode, ⇧+Pad3): <b>HOLD button = record a loop</b> (hold it while you play) · ⇧+HOLD = undo last loop · big knob: turn = switch keyboard, click = play/stop, ⇧+turn = key root / track / tape speed, ⇧+click = rec-arm the grid<br>` +
+      `pads always finger-drum (and write into the grid when ● REC is armed) · 8 knobs = the strip above · faders: master, delay, reverb, swing · mod strip: vibe<br>` +
+      `knob mapping wrong? click a K-box, then turn the knob you want bound there — it sticks<br>` +
+      `no controller? <kbd>A</kbd>–<kbd>;</kbd> piano · <kbd>W E T Y U</kbd> black keys · <kbd>1</kbd>–<kbd>8</kbd> pads · <kbd>space</kbd> play · hold <kbd>⇧T</kbd> record loop · <kbd>⇧R</kbd> rec-arm · <kbd>←</kbd><kbd>→</kbd> keyboard · <kbd>Z</kbd>/<kbd>X</kbd> octave · shift-click a BASS cell to cycle its degree`;
 
-    this.root.append(header, tabs, chordPanel, beatPanel, tapePanel, hw, footer);
+    this.root.append(header, tape, tabs, synthPanel, chordPanel, jammiPanel, drumsPanel, hw, footer);
     this.update();
   }
 
@@ -280,19 +304,10 @@ export class UI {
       key.addEventListener('pointerdown', down);
       key.addEventListener('pointerup', up);
       key.addEventListener('pointerleave', up);
-      // multiple keyboards exist (chord + tape panels); register the visible one last wins is fine
-      this.keyEls.set(note * 1000 + Math.random(), key);
       key.dataset.note = String(note);
       kb.appendChild(key);
     }
     return kb;
-  }
-
-  private buildReel(): HTMLElement {
-    const r = el('div', 'reel');
-    const s = el('div', 'spoke');
-    r.appendChild(s);
-    return r;
   }
 
   padFlash(i: number) {
@@ -308,7 +323,6 @@ export class UI {
     if (!k) return;
     k.box.classList.add('hit');
     window.setTimeout(() => k.box.classList.remove('hit'), 180);
-    // knob moves change state outside the store on some paths — refresh values
     this.update();
   }
 
@@ -317,7 +331,7 @@ export class UI {
     const h = this.hooks;
     const s = h.state();
 
-    document.body.dataset.mode = s.mode;
+    document.body.dataset.kb = s.keyboard;
 
     // header
     const { connected, name } = h.midiStatus();
@@ -329,13 +343,31 @@ export class UI {
     this.els.bpmLab.textContent = `${s.bpm} BPM`;
     (this.els.bpmIn as unknown as HTMLInputElement).value = String(s.bpm);
 
+    // tape strip
+    const t = h.tapeInfo();
+    const tapeRecording = t.recState === 'recording' && !h.jammiRecording();
+    this.els.tapeRec.className = tapeRecording ? 'rec-lit' : '';
+    this.els.tapeRec.textContent = tapeRecording ? '● RECORDING…' : t.hasLoop ? '● HOLD TO LAYER' : '● HOLD TO RECORD';
+    (this.els.speedIn as unknown as HTMLInputElement).value = String(s.tapeSpeed);
+    (this.els.decayIn as unknown as HTMLInputElement).value = String(s.overdubDecay);
+    (this.els.loopVolIn as unknown as HTMLInputElement).value = String(s.loopVolume);
+    this.els.micBtn.className = h.micOn() ? 'lit' : '';
+    this.els.layerBox.innerHTML = '';
+    for (let i = 0; i < t.layers; i++) this.els.layerBox.appendChild(el('i', 'layer-chip'));
+
     // tabs + panels
     for (const b of this.els.tabs.children) {
-      (b as HTMLElement).classList.toggle('active', (b as HTMLElement).dataset.mode === s.mode);
+      (b as HTMLElement).classList.toggle('active', (b as HTMLElement).dataset.kb === s.keyboard);
     }
-    this.els.chordPanel.style.display = s.mode === 'chord' ? '' : 'none';
-    this.els.beatPanel.style.display = s.mode === 'beat' ? '' : 'none';
-    this.els.tapePanel.style.display = s.mode === 'tape' ? '' : 'none';
+    this.els.synthPanel.style.display = s.keyboard === 'synth' ? '' : 'none';
+    this.els.chordPanel.style.display = s.keyboard === 'chord' ? '' : 'none';
+    this.els.jammiPanel.style.display = s.keyboard === 'jammi' ? '' : 'none';
+    this.els.drumsPanel.style.display = s.keyboard === 'drums' ? '' : 'none';
+
+    // synth chrome
+    for (const b of this.els.presetRow.children) {
+      (b as HTMLElement).className = (b as HTMLElement).dataset.preset === s.synthPreset ? 'lit' : '';
+    }
 
     // chord chrome
     for (const b of this.els.chips.children) {
@@ -345,27 +377,20 @@ export class UI {
     this.els.bassT.className = s.bassOn ? 'lit' : '';
     this.els.arpT.className = s.arpOn ? 'lit' : '';
 
-    // beat chrome
+    // jammi chrome
+    this.els.jammiSrc.textContent = `sample: ${h.jammiSource()}`;
+    this.els.jamRec.className = h.jammiRecording() ? 'rec-lit' : '';
+    this.els.jamRec.textContent = h.jammiRecording() ? '● SAMPLING…' : '● HOLD TO SAMPLE';
+
+    // drums chrome
     (this.els.swingIn as unknown as HTMLInputElement).value = String(s.swing);
     for (let tr = 0; tr < NUM_TRACKS; tr++) {
       for (let st = 0; st < NUM_STEPS; st++) {
         this.cells[tr][st].classList.toggle('on', s.grid[tr][st].on);
       }
     }
-    const tnames = this.els.beatPanel.querySelectorAll('.tname');
-    tnames.forEach((t) => t.classList.toggle('sel', Number((t as HTMLElement).dataset.track) === h.selectedTrack()));
-
-    // tape chrome
-    (this.els.speedIn as unknown as HTMLInputElement).value = String(s.tapeSpeed);
-    (this.els.decayIn as unknown as HTMLInputElement).value = String(s.overdubDecay);
-    this.els.micBtn.className = h.micOn() ? 'lit' : '';
-    this.els.jammiBtn.className = s.jammi ? 'lit' : '';
-    const t = h.tapeInfo();
-    this.els.tapeRec.className = t.recState === 'recording' ? 'rec-lit' : '';
-    this.els.tapeRec.textContent = t.recState === 'recording' ? '● RECORDING…' : t.hasLoop ? '● HOLD TO LAYER' : '● HOLD TO RECORD';
-    this.els.tapeHdr.className = t.recState === 'recording' ? 'rec-lit' : '';
-    this.els.layerBox.innerHTML = '';
-    for (let i = 0; i < t.layers; i++) this.els.layerBox.appendChild(el('div', 'layer-chip'));
+    const tnames = this.els.drumsPanel.querySelectorAll('.tname');
+    tnames.forEach((tn) => tn.classList.toggle('sel', Number((tn as HTMLElement).dataset.track) === h.selectedTrack()));
 
     // knob mirror
     const knobs = h.knobLabels();
@@ -379,12 +404,12 @@ export class UI {
     });
   }
 
-  /** rAF loop for the fast-moving things: playhead, held keys, reels, chord name. */
+  /** rAF loop for the fast-moving things: playhead, held keys, tape status, chord name. */
   private frame() {
     const h = this.hooks;
     const s = h.state();
 
-    if (s.mode === 'beat') {
+    if (s.keyboard === 'drums') {
       const ph = h.playhead();
       for (let tr = 0; tr < NUM_TRACKS; tr++) {
         for (let st = 0; st < NUM_STEPS; st++) {
@@ -393,7 +418,7 @@ export class UI {
       }
     }
 
-    if (s.mode === 'chord') {
+    if (s.keyboard === 'chord') {
       const label = h.currentChordLabel();
       const held = h.heldNotes().size > 0;
       if (held && label) {
@@ -406,26 +431,19 @@ export class UI {
       }
     }
 
-    // held keys on every visible keyboard
+    // held keys on the visible keyboard
     const held = h.heldNotes();
     document.querySelectorAll<HTMLElement>('.kb [data-note]').forEach((k) => {
       k.classList.toggle('held', held.has(Number(k.dataset.note)));
     });
 
-    // reels spin with tape speed
-    if (s.mode === 'tape') {
-      const t = h.tapeInfo();
-      const angle = (performance.now() / 1000) * t.speed * 120;
-      document.querySelectorAll<HTMLElement>('.reel .spoke').forEach((sp) => {
-        sp.style.transform = `rotate(${t.hasLoop ? angle : 0}deg)`;
-      });
-      const st = h.tapeInfo();
-      this.els.tapeStatus.textContent =
-        st.recState === 'recording' ? 'recording… release to drop the loop'
-        : st.hasLoop ? `${st.layers} loop${st.layers === 1 ? '' : 's'} · longest ${st.loopSec.toFixed(1)}s · ×${st.speed.toFixed(2)}`
-        : 'empty tape — hold record and play';
-      this.els.tapeStatus.className = 'tape-status' + (st.recState === 'recording' ? ' rec' : '');
-    }
+    // tape strip status
+    const st = h.tapeInfo();
+    this.els.tapeStatus.textContent =
+      st.recState === 'recording' ? (h.jammiRecording() ? 'sampling into JAMMI keys…' : 'recording… release to drop the loop')
+      : st.hasLoop ? `${st.layers} loop${st.layers === 1 ? '' : 's'} · longest ${st.loopSec.toFixed(1)}s · ×${st.speed.toFixed(2)}`
+      : 'empty tape — hold record and play';
+    this.els.tapeStatus.classList.toggle('rec', st.recState === 'recording');
 
     requestAnimationFrame(() => this.frame());
   }
@@ -444,10 +462,18 @@ function button(label: string, onClick: () => void): HTMLElement {
   return b;
 }
 
-function holdToRecord(btn: HTMLElement, h: UIHooks) {
-  btn.addEventListener('pointerdown', (ev) => { ev.preventDefault(); h.tapeRecordStart(); });
-  btn.addEventListener('pointerup', () => h.tapeRecordStop());
-  btn.addEventListener('pointerleave', () => h.tapeRecordStop());
+function slider(min: number, max: number, step: number, oninput: (v: number) => void): HTMLInputElement {
+  const s = document.createElement('input');
+  s.type = 'range';
+  s.min = String(min); s.max = String(max); s.step = String(step);
+  s.oninput = () => oninput(Number(s.value));
+  return s;
+}
+
+function hold(btn: HTMLElement, start: () => void, stop: () => void) {
+  btn.addEventListener('pointerdown', (ev) => { ev.preventDefault(); start(); });
+  btn.addEventListener('pointerup', stop);
+  btn.addEventListener('pointerleave', stop);
 }
 
 function ctl(label: string, input: HTMLElement): HTMLElement {

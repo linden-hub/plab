@@ -3,7 +3,9 @@
 
 import type { ScaleName } from './theory/harmony';
 
-export type Mode = 'chord' | 'beat' | 'tape';
+// The tape looper is global — what changes is which INSTRUMENT the keys are.
+export type Keyboard = 'synth' | 'chord' | 'jammi' | 'drums';
+export type SynthPresetName = 'warm' | 'pluck' | 'bass';
 
 export interface Step { on: boolean; vel: number }
 
@@ -19,7 +21,8 @@ export interface TrackParams {
 }
 
 export interface AppState {
-  mode: Mode;
+  keyboard: Keyboard;
+  synthPreset: SynthPresetName;
 
   // Harmonic brain (shared by all modes)
   keyRoot: number;          // 0..11
@@ -47,11 +50,10 @@ export interface AppState {
   bassSteps: number[];      // scale degree per step (-1 = inherit root)
   trackParams: TrackParams[];
 
-  // Tape mode
+  // Global tape
   tapeSpeed: number;        // -2..2 (negative = reverse)
-  overdubDecay: number;     // 0..1 — how much old layers fade per overdub
+  overdubDecay: number;     // 0..1 — how much old layers fade per new take
   loopVolume: number;       // 0..1 — level of the whole loop playback
-  jammi: boolean;           // true = keys repitch the loop; false = keys play chords over it
 
   // Master FX
   vibe: number;
@@ -62,7 +64,8 @@ export interface AppState {
 
 export function defaultState(): AppState {
   return {
-    mode: 'chord',
+    keyboard: 'chord',
+    synthPreset: 'warm',
     keyRoot: 0,
     scale: 'major',
     bpm: 100,
@@ -86,7 +89,6 @@ export function defaultState(): AppState {
     tapeSpeed: 1,
     overdubDecay: 0.85,
     loopVolume: 1,
-    jammi: false,
     vibe: 0.15,
     delaySend: 0.1,
     reverbSend: 0.15,

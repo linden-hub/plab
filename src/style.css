@@ -7,6 +7,7 @@
   --mist: #f2f2f0;
   --line: #e3e3e0;
   --dim: #8a8a86;
+  --synth: #d98e00;
   --chord: #6a4dff;
   --beat: #ff4d29;
   --tape: #00a894;
@@ -15,9 +16,10 @@
   --radius: 14px;
 }
 
-body[data-mode="chord"] { --accent: var(--chord); }
-body[data-mode="beat"] { --accent: var(--beat); }
-body[data-mode="tape"] { --accent: var(--tape); }
+body[data-kb="synth"] { --accent: var(--synth); }
+body[data-kb="chord"] { --accent: var(--chord); }
+body[data-kb="jammi"] { --accent: var(--tape); }
+body[data-kb="drums"] { --accent: var(--beat); }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -90,7 +92,27 @@ header {
 .bpm { display: flex; align-items: center; gap: 6px; }
 .bpm input { width: 64px; }
 
-/* ---------- mode tabs ---------- */
+/* ---------- global tape strip ---------- */
+
+.tapebar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  border: 2px solid var(--tape);
+  border-radius: var(--radius);
+  padding: 10px 14px;
+  margin-bottom: 16px;
+}
+.tapebar .tape-status { font-size: 12px; font-weight: 700; color: var(--tape); }
+.tapebar .tape-status.rec { color: var(--rec); }
+.tapebar .layers { display: inline-flex; gap: 4px; }
+.tapebar label.ctl { min-width: 90px; }
+.tapebar input[type="range"] { accent-color: var(--tape); width: 90px; }
+
+.jammi-src { font-weight: 700; color: var(--accent); }
+
+/* ---------- keyboard tabs ---------- */
 
 .tabs { display: flex; gap: 10px; margin-bottom: 18px; }
 .tabs button {
@@ -190,7 +212,8 @@ label.ctl b { color: var(--ink); font-size: 11px; letter-spacing: 1px; }
 .reel.spin { }
 .layers { display: flex; gap: 6px; }
 .layer-chip {
-  width: 26px; height: 26px; border-radius: 8px;
+  display: inline-block;
+  width: 16px; height: 16px; border-radius: 5px;
   border: 2px solid var(--tape);
   background: color-mix(in srgb, var(--tape) 30%, white);
 }

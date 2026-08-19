@@ -72,7 +72,6 @@ export class ChordMode {
     this.logOff(spec.bass, 1);
     if (this.held.size === 0) this.arpIndex = 0;
     else this.current = [...this.held.values()].pop()!;
-    this.store.touch('mode');
   }
 
   allOff(now: number) {

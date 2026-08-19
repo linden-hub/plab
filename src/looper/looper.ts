@@ -54,6 +54,10 @@ export class Looper {
   speed = 1;                // -2..2, negative = reverse
   recState: 'idle' | 'recording' = 'idle';
   decayAmount = 0.85;       // older layers fade as new ones land
+  /** Where the next take lands: the tape pool, or the Jammi sampler keys. */
+  recordTarget: 'tape' | 'jammi' = 'tape';
+  /** Called when a take was recorded with recordTarget 'jammi'. */
+  onJammiTake: (buf: AudioBuffer) => void = () => {};
   /** Called on state changes so the UI can re-render. */
   onChange: () => void = () => {};
 
@@ -117,8 +121,9 @@ export class Looper {
   }
 
   /** Hold-to-record: starts NOW, runs until stopRecord() (or the safety cap). */
-  record() {
+  record(target: 'tape' | 'jammi' = 'tape') {
     if (this.recState !== 'idle') return;
+    this.recordTarget = target;
     const start = this.ctx.currentTime + 0.03;
     this.node.port.postMessage({ cmd: 'arm', start, end: start + Looper.MAX_RECORD_SEC });
     this.recState = 'recording';
@@ -151,6 +156,14 @@ export class Looper {
     const L = buf.getChannelData(0), R = buf.getChannelData(1);
     let off = 0;
     for (const [l, r] of chunks) { L.set(l, off); R.set(r, off); off += l.length; }
+
+    if (this.recordTarget === 'jammi') {
+      this.recordTarget = 'tape';
+      this.recState = 'idle';
+      this.onJammiTake(buf);
+      this.onChange();
+      return;
+    }
 
     // Frippertronics fade: every existing layer steps back as a new one lands.
     for (const layer of this.layers) {

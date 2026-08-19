@@ -1,18 +1,21 @@
-// PLAYLAB — boot + wiring. One harmonic brain, one clock, three play modes.
+// PLAYLAB — boot + wiring. One harmonic brain, one clock, one global tape,
+// four keyboards (what the 25 keys ARE): synth, chord, jammi, drums.
 
 import './style.css';
-import { Store, type AppState, type Mode, NUM_STEPS, TRACK_NAMES } from './state';
+import { Store, type AppState, type Keyboard, NUM_STEPS, TRACK_NAMES } from './state';
 import { AudioEngine } from './audio/engine';
 import { Clock } from './sequencer/clock';
 import { Sequencer, BASS_TRACK } from './sequencer/sequencer';
 import { ChordMode } from './modes/chord';
 import { Looper } from './looper/looper';
+import { JammiSampler } from './audio/jammi';
+import { PolySynth, PRESETS } from './audio/synth';
 import { MidiManager } from './midi/midi';
 import { MINILAB3, padIndex, knobIndex, faderIndex, dawKnobIndex, dawFaderIndex, relDelta, VPOT_FIRST_CC, VPOT_LAST_CC, vpotDelta, padColorSysex, oledTextSysex } from './midi/minilab3';
 import { SessionManager } from './persist/session';
 import { encodeWav, download, renderPattern } from './export/wav';
 import { exportMidi } from './export/midi';
-import { snapToScale, degreeToMidi, SCALE_LIST } from './theory/harmony';
+import { snapToScale } from './theory/harmony';
 import { UI } from './ui/ui';
 
 const app = document.getElementById('app')!;
@@ -23,7 +26,7 @@ overlay.className = 'overlay';
 overlay.innerHTML = `
   <h1>PLAY<em>LAB</em></h1>
   <p>a music &amp; sound-design playground for your MiniLab&nbsp;3.<br>
-  chords you can't get wrong · beats on pads · a tape loop that eats everything.</p>
+  four keyboards, chords you can't get wrong, and a tape that eats everything.</p>
 `;
 const startBtn = document.createElement('button');
 startBtn.className = 'primary';
@@ -46,10 +49,12 @@ async function boot() {
   const clock = new Clock(engine.ctx);
   const seq = new Sequencer(store, clock, engine.ctx, engine.sum);
   const chord = new ChordMode(store, clock, engine.ctx, engine.sum);
+  const lead = new PolySynth(engine.ctx, engine.sum, PRESETS.warm, 10);
   const looper = new Looper(engine.ctx, engine.recordTap, engine.loopIn);
   await looper.init();
+  const jammi = new JammiSampler(engine.ctx, engine.loopIn);
   const midi = new MidiManager();
-  const session = new SessionManager(engine.ctx, looper);
+  const session = new SessionManager(engine.ctx, looper, jammi);
 
   // ---- restore last session ----
   const saved = session.loadAutosaveState();
@@ -59,6 +64,8 @@ async function boot() {
 
   let selTrack = 0;
   const held = new Set<number>();
+  let shiftHeld = false;         // MiniLab Shift button (CC 27, DAW mode)
+  let jammiRecording = false;    // current take is destined for the JAMMI keys
 
   // Knob remapping (MIDI-learn): click a K-box, turn a knob to bind it.
   // Keyed by source port + CC; survives reloads.
@@ -66,12 +73,21 @@ async function boot() {
   try { knobRemap = JSON.parse(localStorage.getItem('plab.knobmap.v1') ?? '{}'); } catch { /* fresh */ }
   let learnTarget: number | null = null;
 
+  looper.onJammiTake = (buf) => {
+    jammi.setSample(buf, 'mic take');
+    jammiRecording = false;
+    ui.toast('take is on the JAMMI keys');
+    ui.update();
+    void session.autosaveAudio();
+  };
+
   // ---- UI ----
   const ui = new UI({
     state: () => store.state,
     noteOn, noteOff,
     padHit: (i, vel) => padHit(i, vel),
-    setMode,
+    padRelease: (i) => padRelease(i),
+    setKeyboard,
     togglePlay, toggleRec: () => store.patch({ recording: !store.state.recording }),
     patch: (p) => store.patch(p),
     toggleCell(track, step, shift) {
@@ -89,9 +105,8 @@ async function boot() {
     selectTrack: (i) => { selTrack = i; store.touch('grid'); },
     selectedTrack: () => selTrack,
     playhead: () => (store.state.playing ? seq.playhead : -1),
-    padRelease: (i) => padRelease(i),
     tapeRecordStart: () => tapeRecordStart(),
-    tapeRecordStop: () => looper.stopRecord(),
+    tapeRecordStop: () => { if (!jammiRecording) looper.stopRecord(); },
     tapeUndo: () => looper.popLayer(),
     tapeClear: () => looper.clear(),
     tapeInfo: () => ({
@@ -106,12 +121,28 @@ async function boot() {
       else looper.enableMic().then((ok) => { if (!ok) ui.toast('mic permission denied'); });
     },
     micOn: () => looper.micEnabled,
+    jammiUseTape() {
+      jammi.setSample(null, 'tape');
+      ui.toast('JAMMI keys play the tape');
+      ui.update();
+    },
+    jammiLoadFile(f) {
+      jammi.loadFile(f).then((ok) => {
+        ui.toast(ok ? `"${jammi.sourceName}" is on the JAMMI keys` : 'could not decode that file');
+        ui.update();
+        if (ok) void session.autosaveAudio();
+      });
+    },
+    jammiRecordStart: () => jammiRecordStart(),
+    jammiRecordStop: () => { if (jammiRecording) looper.stopRecord(); },
+    jammiSource: () => jammi.sourceName,
+    jammiRecording: () => jammiRecording,
     midiStatus: () => ({ connected: midi.connected, name: midi.deviceName }),
     exportLoopWav() {
       const mix = looper.mixdown();
-      if (!mix) { ui.toast('no loop recorded yet'); return; }
-      download(encodeWav(mix), `playlab-loop-${stamp()}.wav`);
-      ui.toast('loop.wav exported — drop it on a REAPER track');
+      if (!mix) { ui.toast('no loops on the tape yet'); return; }
+      download(encodeWav(mix), `playlab-tape-${stamp()}.wav`);
+      ui.toast('tape.wav exported — drop it on a REAPER track');
     },
     async exportBeatWav() {
       ui.toast('rendering pattern…');
@@ -165,7 +196,8 @@ async function boot() {
     if (changed.has('overdubDecay')) looper.decayAmount = s.overdubDecay;
     if (changed.has('loopVolume')) engine.setLoopVolume(s.loopVolume);
     if (changed.has('brightness') || changed.has('release')) chord.applyMacros();
-    if (changed.has('mode')) syncHardware(s);
+    if (changed.has('synthPreset')) lead.preset = { ...PRESETS[s.synthPreset] };
+    if (changed.has('keyboard')) syncHardware(s);
     session.scheduleAutosave(s);
     ui.update();
   });
@@ -180,6 +212,7 @@ async function boot() {
     engine.setDelayTime(60 / s.bpm * 0.75);
     looper.decayAmount = s.overdubDecay;
     engine.setLoopVolume(s.loopVolume);
+    lead.preset = { ...PRESETS[s.synthPreset] };
     chord.applyMacros();
   }
 
@@ -201,20 +234,37 @@ async function boot() {
     store.patch({ playing });
   }
 
-  // ---- note routing (MIDI keys, on-screen keys, computer keys) ----
+  // ---- global tape record (hold-to-record) ----
+  function tapeRecordStart() {
+    if (looper.recState !== 'idle') return;
+    looper.decayAmount = store.state.overdubDecay;
+    looper.record('tape');
+  }
+
+  function jammiRecordStart() {
+    if (looper.recState !== 'idle') return;
+    jammiRecording = true;
+    looper.record('jammi');
+    ui.update();
+  }
+
+  // ---- note routing: the keyboard decides what the 25 keys ARE ----
   function noteOn(note: number, vel: number) {
     if (held.has(note)) return;
     held.add(note);
     const s = store.state;
     const now = engine.now;
-    if (s.mode === 'chord') chord.keyOn(note, vel, now);
-    else if (s.mode === 'tape') {
-      // default: the harmony instrument plays over the loop; JAMMI flips keys to repitch it
-      if (!s.jammi || !looper.playPitched(note, vel, now)) chord.keyOn(note, vel, now);
-    } else {
-      // beat mode: keys play the scale-locked bass, live
-      const n = snapToScale(note - 24, s.keyRoot, s.scale);
-      seq.bass.noteOn(n, vel, now);
+    switch (s.keyboard) {
+      case 'synth': lead.noteOn(note, vel, now); break;
+      case 'chord': chord.keyOn(note, vel, now); break;
+      case 'jammi':
+        if (!jammi.noteOn(note, vel, now, looper.mixdown())) ui.toast('nothing to play — record the tape or load a sample');
+        break;
+      case 'drums': {
+        const n = snapToScale(note - 24, s.keyRoot, s.scale);
+        seq.bass.noteOn(n, vel, now);
+        break;
+      }
     }
   }
 
@@ -222,62 +272,54 @@ async function boot() {
     if (!held.delete(note)) return;
     const s = store.state;
     const now = engine.now;
-    if (s.mode === 'chord' || s.mode === 'tape') chord.keyOff(note, now);
-    if (s.mode === 'beat') seq.bass.noteOff(snapToScale(note - 24, s.keyRoot, s.scale), now);
-  }
-
-  // ---- pads per mode ----
-  function padHit(i: number, vel: number) {
-    const s = store.state;
-    ui.padFlash(i);
-    if (s.mode === 'beat') {
-      seq.padHit(i, vel, engine.now);
-    } else if (s.mode === 'chord') {
-      if (i < 6) { store.patch({ scale: SCALE_LIST[i] }); ui.toast(`scale: ${SCALE_LIST[i]}`); }
-      else if (i === 6) store.patch({ bassOn: !s.bassOn });
-      else store.patch({ arpOn: !s.arpOn });
-    } else {
-      // tape transport on pads
-      if (i === 0) tapeRecordStart(); // held pad records; padRelease() stops
-      else if (i === 1) looper.popLayer();
-      else if (i === 2) store.patch({ tapeSpeed: -store.state.tapeSpeed });
-      else if (i === 3) store.patch({ tapeSpeed: 1 });
-      else if (i >= 4) seq.padHit(i, vel, engine.now); // bonus: drums still reachable on tape
+    switch (s.keyboard) {
+      case 'synth': lead.noteOff(note, now); break;
+      case 'chord': chord.keyOff(note, now); break;
+      case 'jammi': jammi.noteOff(note, now); break;
+      case 'drums': seq.bass.noteOff(snapToScale(note - 24, store.state.keyRoot, store.state.scale), now); break;
     }
   }
 
-  // Chompi-style hold-to-record: press starts NOW, release sets the loop
-  // (or ends the overdub). No bar grid, no transport needed.
-  function tapeRecordStart() {
-    if (looper.recState !== 'idle') return;
-    looper.decayAmount = store.state.overdubDecay;
-    looper.record();
+  // ---- pads: always the drum kit (record into the grid when armed) ----
+  function padHit(i: number, vel: number) {
+    ui.padFlash(i);
+    seq.padHit(i, vel, engine.now);
   }
 
-  function padRelease(i: number) {
-    if (store.state.mode === 'tape' && i === 0) looper.stopRecord();
+  function padRelease(_i: number) { /* drums are one-shots; nothing to release */ }
+
+  // ---- keyboard switching + hardware feedback ----
+  const KEYBOARDS: Keyboard[] = ['synth', 'chord', 'jammi', 'drums'];
+
+  function setKeyboard(k: Keyboard) {
+    const now = engine.now;
+    chord.allOff(now);
+    lead.allOff(now);
+    jammi.allOff(now);
+    held.clear();
+    store.patch({ keyboard: k });
   }
 
-  // ---- mode switching + hardware feedback ----
-  function setMode(m: Mode) {
-    chord.allOff(engine.now);
-    store.patch({ mode: m });
-  }
-
-  const MODE_COLORS: Record<Mode, [number, number, number]> = {
+  const KB_COLORS: Record<Keyboard, [number, number, number]> = {
+    synth: [127, 90, 0],
     chord: [64, 32, 127],
-    beat: [127, 30, 8],
-    tape: [0, 110, 90],
+    jammi: [0, 110, 90],
+    drums: [127, 30, 8],
   };
 
   function syncHardware(s: AppState) {
-    const [r, g, b] = MODE_COLORS[s.mode];
+    const [r, g, b] = KB_COLORS[s.keyboard];
     for (let i = 0; i < 8; i++) midi.sendSysex(padColorSysex(i, r, g, b));
-    const line2 = s.mode === 'chord' ? 'keys = chords' : s.mode === 'beat' ? 'pads = drums' : 'pad1 = record';
-    midi.sendSysex(oledTextSysex(`PLAYLAB ${s.mode.toUpperCase()}`, line2));
+    const line2: Record<Keyboard, string> = {
+      synth: 'plain keys',
+      chord: 'keys = chords',
+      jammi: 'keys = sample',
+      drums: 'pads = drums',
+    };
+    midi.sendSysex(oledTextSysex(`PLAYLAB ${s.keyboard.toUpperCase()}`, line2[s.keyboard]));
   }
 
-  // ---- knob/fader mapping per mode ----
+  // ---- knob/fader mapping per keyboard ----
   // Each knob is a normalized get/set pair, so absolute encoders (Arturia
   // mode) and relative encoders (DAW mode) drive the same parameters.
   // `steps` marks quantized params: relative turns move one position per
@@ -287,19 +329,29 @@ async function boot() {
   function knobDefs(): KnobDef[] {
     const s = store.state;
     const P = (p: Partial<AppState>) => store.patch(p);
-    if (s.mode === 'chord') {
+    const common: Record<string, KnobDef> = {
+      vibe: { get: () => s.vibe, set: (v) => P({ vibe: v }) },
+      delay: { get: () => s.delaySend, set: (v) => P({ delaySend: v }) },
+      reverb: { get: () => s.reverbSend, set: (v) => P({ reverbSend: v }) },
+      speed: { get: () => (s.tapeSpeed + 2) / 4, set: (v) => P({ tapeSpeed: Math.round((v * 4 - 2) * 20) / 20 }) },
+      fade: { get: () => (s.overdubDecay - 0.3) / 0.7, set: (v) => P({ overdubDecay: 0.3 + v * 0.7 }) },
+      loopVol: { get: () => s.loopVolume, set: (v) => P({ loopVolume: v }) },
+      bright: { get: () => s.brightness, set: (v) => P({ brightness: v }) },
+      release: { get: () => s.release, set: (v) => P({ release: v }) },
+    };
+    if (s.keyboard === 'chord') {
       return [
         { get: () => s.extension / 2, set: (v) => P({ extension: Math.round(v * 2) }), steps: 3 },
         { get: () => s.spread, set: (v) => P({ spread: v }) },
         { get: () => s.inversion / 3, set: (v) => P({ inversion: Math.round(v * 3) }), steps: 4 },
         { get: () => (s.chordOctave / 12 + 2) / 4, set: (v) => P({ chordOctave: (Math.round(v * 4) - 2) * 12 }), steps: 5 },
-        { get: () => s.brightness, set: (v) => P({ brightness: v }) },
-        { get: () => s.release, set: (v) => P({ release: v }) },
+        common.bright,
+        common.release,
         { get: () => [4, 2, 1].indexOf(s.arpRate) / 2, set: (v) => P({ arpRate: [4, 2, 1][Math.min(2, Math.floor(v * 3))] }), steps: 3 },
-        { get: () => s.vibe, set: (v) => P({ vibe: v }) },
+        common.vibe,
       ];
     }
-    if (s.mode === 'beat') {
+    if (s.keyboard === 'drums') {
       const tp = () => s.trackParams[selTrack];
       return [
         { get: () => (s.bpm - 60) / 120, set: (v) => P({ bpm: Math.round(60 + v * 120) }) },
@@ -307,21 +359,18 @@ async function boot() {
         { get: () => tp().volume, set: (v) => { tp().volume = v; store.touch('grid'); } },
         { get: () => (tp().pitch + 12) / 24, set: (v) => { tp().pitch = Math.round(v * 24) - 12; store.touch('grid'); } },
         { get: () => tp().decay, set: (v) => { tp().decay = v; store.touch('grid'); } },
-        { get: () => s.vibe, set: (v) => P({ vibe: v }) },
-        { get: () => s.delaySend, set: (v) => P({ delaySend: v }) },
-        { get: () => s.reverbSend, set: (v) => P({ reverbSend: v }) },
+        common.vibe,
+        common.delay,
+        common.reverb,
       ];
     }
-    return [
-      { get: () => (s.tapeSpeed + 2) / 4, set: (v) => P({ tapeSpeed: Math.round((v * 4 - 2) * 20) / 20 }) },
-      { get: () => (s.overdubDecay - 0.3) / 0.7, set: (v) => P({ overdubDecay: 0.3 + v * 0.7 }) },
-      { get: () => s.loopVolume, set: (v) => P({ loopVolume: v }) },
-      { get: () => s.vibe, set: (v) => P({ vibe: v }) },
-      { get: () => s.delaySend, set: (v) => P({ delaySend: v }) },
-      { get: () => s.reverbSend, set: (v) => P({ reverbSend: v }) },
-      { get: () => s.masterVolume, set: (v) => P({ masterVolume: v }) },
-      { get: () => s.brightness, set: (v) => P({ brightness: v }) },
-    ];
+    if (s.keyboard === 'jammi') {
+      return [common.speed, common.fade, common.loopVol, common.vibe, common.delay, common.reverb,
+        { get: () => s.masterVolume, set: (v) => P({ masterVolume: v }) }, common.bright];
+    }
+    // synth
+    return [common.bright, common.release, common.vibe, common.delay, common.reverb,
+      common.loopVol, common.speed, common.fade];
   }
 
   const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
@@ -357,12 +406,8 @@ async function boot() {
     }
     const slot = knobRemap[key] ?? defaultSlot;
     if (kind === 'abs') onKnobAbs(slot, value);
-    else onKnobRel(slot, relOrVpotDelta(source, value));
+    else onKnobRel(slot, source === 'mcu' ? vpotDelta(value) : relDelta(value));
     return true;
-  }
-
-  function relOrVpotDelta(source: string, value: number): number {
-    return source === 'mcu' ? vpotDelta(value) : relDelta(value);
   }
 
   function applyFader(f: number, v: number) {
@@ -375,19 +420,18 @@ async function boot() {
   // ---- main encoder: hands-free navigation ----
   // The big knob sends CC 28/29 (turn) + 118/119 (click) with the device in
   // DAW mode (Shift+Pad3); in factory Arturia mode it only browses Analog Lab.
-  const MODES: Mode[] = ['chord', 'beat', 'tape'];
   function mainTurn(delta: number) {
     if (delta === 0) return;
-    const next = MODES[(MODES.indexOf(store.state.mode) + (delta > 0 ? 1 : -1) + 3) % 3];
-    setMode(next);
+    const next = KEYBOARDS[(KEYBOARDS.indexOf(store.state.keyboard) + (delta > 0 ? 1 : -1) + 4) % 4];
+    setKeyboard(next);
   }
   function mainShiftTurn(delta: number) {
     if (delta === 0) return;
     const s = store.state;
     const d = delta > 0 ? 1 : -1;
-    if (s.mode === 'chord') {
+    if (s.keyboard === 'chord' || s.keyboard === 'synth') {
       store.patch({ keyRoot: (s.keyRoot + d + 12) % 12 });
-    } else if (s.mode === 'beat') {
+    } else if (s.keyboard === 'drums') {
       selTrack = Math.max(0, Math.min(7, selTrack + d));
       store.touch('grid');
       ui.toast(`track: ${TRACK_NAMES[selTrack]}`);
@@ -397,19 +441,30 @@ async function boot() {
   }
 
   function knobReadout(s: AppState): { label: string; value: string; norm: number }[] {
-    if (s.mode === 'chord') {
+    const common = {
+      vibe: { label: 'VIBE', value: pct(s.vibe), norm: s.vibe },
+      delay: { label: 'DELAY', value: pct(s.delaySend), norm: s.delaySend },
+      reverb: { label: 'REVERB', value: pct(s.reverbSend), norm: s.reverbSend },
+      speed: { label: 'SPEED', value: '×' + s.tapeSpeed.toFixed(2), norm: (s.tapeSpeed + 2) / 4 },
+      fade: { label: 'FADE', value: pct(s.overdubDecay), norm: (s.overdubDecay - 0.3) / 0.7 },
+      loopVol: { label: 'LOOP VOL', value: pct(s.loopVolume), norm: s.loopVolume },
+      bright: { label: 'BRIGHT', value: pct(s.brightness), norm: s.brightness },
+      release: { label: 'RELEASE', value: pct(s.release), norm: s.release },
+      master: { label: 'MASTER', value: pct(s.masterVolume), norm: s.masterVolume },
+    };
+    if (s.keyboard === 'chord') {
       return [
         { label: 'EXT', value: ['triad', '7th', '9th'][s.extension] ?? 'triad', norm: s.extension / 2 },
         { label: 'SPREAD', value: pct(s.spread), norm: s.spread },
         { label: 'INV', value: String(s.inversion), norm: s.inversion / 3 },
         { label: 'OCT', value: String(s.chordOctave / 12), norm: (s.chordOctave / 12 + 2) / 4 },
-        { label: 'BRIGHT', value: pct(s.brightness), norm: s.brightness },
-        { label: 'RELEASE', value: pct(s.release), norm: s.release },
+        common.bright,
+        common.release,
         { label: 'ARP', value: s.arpRate === 1 ? '16th' : s.arpRate === 2 ? '8th' : '1/4', norm: 1 - (s.arpRate - 1) / 3 },
-        { label: 'VIBE', value: pct(s.vibe), norm: s.vibe },
+        common.vibe,
       ];
     }
-    if (s.mode === 'beat') {
+    if (s.keyboard === 'drums') {
       const p = s.trackParams[selTrack];
       const t = TRACK_NAMES[selTrack];
       return [
@@ -418,21 +473,15 @@ async function boot() {
         { label: `${t} VOL`, value: pct(p.volume), norm: p.volume },
         { label: `${t} PITCH`, value: (p.pitch >= 0 ? '+' : '') + p.pitch, norm: (p.pitch + 12) / 24 },
         { label: `${t} DECAY`, value: pct(p.decay), norm: p.decay },
-        { label: 'VIBE', value: pct(s.vibe), norm: s.vibe },
-        { label: 'DELAY', value: pct(s.delaySend), norm: s.delaySend },
-        { label: 'REVERB', value: pct(s.reverbSend), norm: s.reverbSend },
+        common.vibe,
+        common.delay,
+        common.reverb,
       ];
     }
-    return [
-      { label: 'SPEED', value: '×' + s.tapeSpeed.toFixed(2), norm: (s.tapeSpeed + 2) / 4 },
-      { label: 'DECAY', value: pct(s.overdubDecay), norm: (s.overdubDecay - 0.3) / 0.7 },
-      { label: 'LOOP VOL', value: pct(s.loopVolume), norm: s.loopVolume },
-      { label: 'VIBE', value: pct(s.vibe), norm: s.vibe },
-      { label: 'DELAY', value: pct(s.delaySend), norm: s.delaySend },
-      { label: 'REVERB', value: pct(s.reverbSend), norm: s.reverbSend },
-      { label: 'MASTER', value: pct(s.masterVolume), norm: s.masterVolume },
-      { label: 'BRIGHT', value: pct(s.brightness), norm: s.brightness },
-    ];
+    if (s.keyboard === 'jammi') {
+      return [common.speed, common.fade, common.loopVol, common.vibe, common.delay, common.reverb, common.master, common.bright];
+    }
+    return [common.bright, common.release, common.vibe, common.delay, common.reverb, common.loopVol, common.speed, common.fade];
   }
 
   // ---- MIDI wiring ----
@@ -463,6 +512,19 @@ async function boot() {
       }
       noteOff(e.a);
     } else if (e.type === 'cc') {
+      // HOLD button = the permanent record-loop button. Rising edge starts,
+      // falling edge stops — works whether the button is momentary or latching.
+      // Shift+HOLD = undo the last loop.
+      if (e.a === MINILAB3.sustainCC) {
+        if (e.b > 63) {
+          if (shiftHeld) looper.popLayer();
+          else tapeRecordStart();
+        } else if (!jammiRecording) {
+          looper.stopRecord();
+        }
+        return;
+      }
+      if (e.a === MINILAB3.shiftCC) { shiftHeld = e.b > 63; return; }
       const k = knobIndex(e.a);
       if (k >= 0) { routeKnobCC('main', e.a, e.b, 'abs', k); return; }
       const f = faderIndex(e.a);
@@ -477,7 +539,6 @@ async function boot() {
       if (e.a === MINILAB3.mainShiftTurnCC) { mainShiftTurn(relDelta(e.b)); return; }
       if (e.a === MINILAB3.mainClickCC) { if (e.b > 63) togglePlay(); return; }
       if (e.a === MINILAB3.mainShiftClickCC) { if (e.b > 63) store.patch({ recording: !store.state.recording }); return; }
-      if (e.a === MINILAB3.shiftCC) return;
       if (e.a === MINILAB3.modCC) { store.patch({ vibe: e.b / 127 }); return; }
       console.debug('[plab] unmapped CC', e.source, e.channel, e.a, e.b);
     }
@@ -504,14 +565,13 @@ async function boot() {
     if (key === 'z') { kbOctave = Math.max(-2, kbOctave - 1); ui.toast(`octave ${kbOctave}`); return; }
     if (key === 'x') { kbOctave = Math.min(2, kbOctave + 1); ui.toast(`octave ${kbOctave}`); return; }
     if (key === 'arrowright' || key === 'arrowleft') {
-      const modes: Mode[] = ['chord', 'beat', 'tape'];
       const d = key === 'arrowright' ? 1 : -1;
-      setMode(modes[(modes.indexOf(store.state.mode) + d + 3) % 3]);
+      setKeyboard(KEYBOARDS[(KEYBOARDS.indexOf(store.state.keyboard) + d + 4) % 4]);
     }
   });
   window.addEventListener('keyup', (ev) => {
     const key = ev.key.toLowerCase();
-    if (key === 't' && looper.recState === 'recording') { looper.stopRecord(); return; }
+    if (key === 't' && looper.recState === 'recording' && !jammiRecording) { looper.stopRecord(); return; }
     if (key in KEYMAP) noteOff(KEYMAP[key] + kbOctave * 12);
     if (key >= '1' && key <= '8') padRelease(Number(key) - 1);
   });
