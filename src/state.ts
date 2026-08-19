@@ -51,6 +51,7 @@ export interface AppState {
   tapeBars: number;         // 1|2|4|8
   tapeSpeed: number;        // -2..2 (negative = reverse)
   overdubDecay: number;     // 0..1 — how much old layers fade per overdub
+  jammi: boolean;           // true = keys repitch the loop; false = keys play chords over it
 
   // Master FX
   vibe: number;
@@ -85,6 +86,7 @@ export function defaultState(): AppState {
     tapeBars: 2,
     tapeSpeed: 1,
     overdubDecay: 0.85,
+    jammi: false,
     vibe: 0.15,
     delaySend: 0.1,
     reverbSend: 0.15,

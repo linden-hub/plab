@@ -11,6 +11,17 @@ export const MINILAB3 = {
   faderCCs: [82, 83, 85, 17],                        // 4 faders, absolute, ch 1
   modCC: 1,               // mod strip (latching)
   sustainCC: 64,          // Hold button
+
+  // DAW mode (Shift+Pad3): encoders turn relative (binary offset), different CCs.
+  dawKnobCCs: [86, 87, 89, 90, 110, 111, 116, 117],
+  dawFaderCCs: [14, 15, 30, 31],
+
+  // Main encoder (big knob) — sends these in DAW mode; ch 1.
+  mainTurnCC: 28,         // relative binary offset: 65.. = +, 63.. = −
+  mainShiftTurnCC: 29,
+  mainClickCC: 118,       // 127 press, 0 release
+  mainShiftClickCC: 119,
+  shiftCC: 27,            // Shift button state
 } satisfies Record<string, number | number[]>;
 
 export function padIndex(note: number): number {
@@ -22,6 +33,11 @@ export function padIndex(note: number): number {
 
 export function knobIndex(cc: number): number { return MINILAB3.knobCCs.indexOf(cc); }
 export function faderIndex(cc: number): number { return MINILAB3.faderCCs.indexOf(cc); }
+export function dawKnobIndex(cc: number): number { return MINILAB3.dawKnobCCs.indexOf(cc); }
+export function dawFaderIndex(cc: number): number { return MINILAB3.dawFaderCCs.indexOf(cc); }
+
+/** Relative binary-offset encoder value → signed delta (64 = no move). */
+export function relDelta(value: number): number { return value - 64; }
 
 // ---- SysEx (all messages use the Arturia header F0 00 20 6B 7F 42 … F7) ----
 

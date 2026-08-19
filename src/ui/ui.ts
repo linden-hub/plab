@@ -87,7 +87,10 @@ export class UI {
     this.els.bpmLab = bpmLab;
     (this.els.bpmIn as unknown as HTMLInputElement) = bpmIn as unknown as HTMLElement & HTMLInputElement;
     bpmWrap.append(bpmLab, bpmIn);
-    transport.append(bpmWrap, play, rec,
+    const tapeHdr = button('● TAPE', () => h.tapeRecord());
+    tapeHdr.title = 'record the tape loop from any mode (⇧T)';
+    this.els.tapeHdr = tapeHdr;
+    transport.append(bpmWrap, play, rec, tapeHdr,
       button('WAV·LOOP', () => h.exportLoopWav()),
       button('WAV·BEAT', () => h.exportBeatWav()),
       button('MIDI', () => h.exportMidiFile()),
@@ -203,12 +206,15 @@ export class UI {
     this.els.decayIn = decayIn as unknown as HTMLElement;
     const micBtn = button('MIC', () => h.toggleMic());
     this.els.micBtn = micBtn;
+    const jammiBtn = button('JAMMI KEYS', () => h.patch({ jammi: !h.state().jammi }));
+    jammiBtn.title = 'on: keys repitch the loop · off: keys play chords over it';
+    this.els.jammiBtn = jammiBtn;
     tapeRow.append(recBtn, ctl('LENGTH', barsSel), ctl('SPEED', speedIn), ctl('OVERDUB DECAY', decayIn),
-      micBtn, el('span', 'spacer'),
+      micBtn, jammiBtn, el('span', 'spacer'),
       button('UNDO', () => h.tapeUndo()),
       button('CLEAR', () => h.tapeClear()));
     const tapeHint = el('div', 'row');
-    tapeHint.innerHTML = `<span style="color:var(--dim);font-size:11px">keys replay the loop repitched (C4 = original) · recording captures everything you play, in any mode</span>`;
+    tapeHint.innerHTML = `<span style="color:var(--dim);font-size:11px">keys play chords over the loop (JAMMI flips them to repitch it, C4 = original) · ● TAPE in the header records from any mode — play CHORD or BEAT and punch in</span>`;
     tapePanel.append(reels, tapeRow, tapeHint, this.buildKeyboard());
     this.els.tapePanel = tapePanel;
 
@@ -229,6 +235,8 @@ export class UI {
     const footer = el('footer');
     footer.innerHTML =
       `MiniLab 3: keys play · pads drum (BEAT) / pick scale (CHORD) / drive tape (TAPE) · 8 knobs = the panel above · faders: volume, delay, reverb, swing<br>` +
+      `big knob (device in DAW mode, ⇧+Pad3): turn = switch mode · click = play/stop · ⇧+turn = key root / track / tape speed · ⇧+click = rec arm<br>` +
+      `● TAPE records the loop from any mode — jam in CHORD or BEAT and punch in (<kbd>⇧T</kbd>)<br>` +
       `no controller? <kbd>A</kbd>–<kbd>;</kbd> piano · <kbd>W E T Y U</kbd> black keys · <kbd>1</kbd>–<kbd>8</kbd> pads · <kbd>space</kbd> play · <kbd>⇧R</kbd> record · <kbd>←</kbd><kbd>→</kbd> mode · <kbd>Z</kbd>/<kbd>X</kbd> octave · shift-click a BASS cell to cycle its scale degree`;
 
     this.root.append(header, tabs, chordPanel, beatPanel, tapePanel, hw, footer);
@@ -331,9 +339,11 @@ export class UI {
     (this.els.speedIn as unknown as HTMLInputElement).value = String(s.tapeSpeed);
     (this.els.decayIn as unknown as HTMLInputElement).value = String(s.overdubDecay);
     this.els.micBtn.className = h.micOn() ? 'lit' : '';
+    this.els.jammiBtn.className = s.jammi ? 'lit' : '';
     const t = h.tapeInfo();
     this.els.tapeRec.className = t.recState === 'recording' ? 'rec-lit' : t.recState === 'armed' ? 'lit' : '';
     this.els.tapeRec.textContent = t.recState === 'recording' ? '● RECORDING' : t.recState === 'armed' ? '● ARMED…' : t.hasLoop ? '● OVERDUB' : '● RECORD';
+    this.els.tapeHdr.className = t.recState === 'recording' ? 'rec-lit' : t.recState === 'armed' ? 'lit' : '';
     this.els.layerBox.innerHTML = '';
     for (let i = 0; i < t.layers; i++) this.els.layerBox.appendChild(el('div', 'layer-chip'));
 

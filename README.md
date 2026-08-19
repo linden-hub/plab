@@ -33,11 +33,20 @@ No controller? Full computer-keyboard fallback: `A`–`;` piano (`W E T Y U` bla
 
 | Control | CHORD | BEAT | TAPE |
 |---|---|---|---|
-| Keys | diatonic chords by degree (black key = +1 extension) | scale-locked bass, live | replay loop repitched (C4 = original) |
+| Keys | diatonic chords by degree (black key = +1 extension) | scale-locked bass, live | chords over the loop (JAMMI: repitch the loop, C4 = original) |
 | Pads 1–8 | 1–6 scale · 7 bass · 8 arp | finger-drum the 8 tracks (records when armed) | 1 record/overdub · 2 undo · 3 reverse · 4 speed reset |
 | Knobs 1–8 | ext · spread · inv · oct · bright · release · arp · vibe | bpm · swing · vol · pitch · decay · vibe · delay · reverb | speed · decay · bars · vibe · delay · reverb · master · bright |
 | Faders 1–4 | master · delay · reverb · swing (all modes) | | |
 | Mod strip | vibe (all modes) | | |
+
+**Recording works from any mode**: the header's **● TAPE** button (or `⇧T`) punches the loop
+in wherever you are — jam in CHORD or BEAT, record, then export WAV·LOOP.
+
+**Hands-free navigation with the big knob** — put the device in DAW mode (Shift+Pad3):
+turn = switch mode, click = play/stop, Shift+turn = key root (CHORD) / track (BEAT) / tape
+speed (TAPE), Shift+click = record arm. In DAW mode the 8 encoders and 4 faders keep working
+(relative CCs are handled); in factory Arturia mode the big knob only browses Analog Lab and
+sends nothing, so use DAW mode if you want it.
 
 If the browser grants SysEx, mode switches recolor the pads and write to the OLED.
 

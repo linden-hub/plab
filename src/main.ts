@@ -8,7 +8,7 @@ import { Sequencer, BASS_TRACK } from './sequencer/sequencer';
 import { ChordMode } from './modes/chord';
 import { Looper } from './looper/looper';
 import { MidiManager } from './midi/midi';
-import { MINILAB3, padIndex, knobIndex, faderIndex, padColorSysex, oledTextSysex } from './midi/minilab3';
+import { MINILAB3, padIndex, knobIndex, faderIndex, dawKnobIndex, dawFaderIndex, relDelta, padColorSysex, oledTextSysex } from './midi/minilab3';
 import { SessionManager } from './persist/session';
 import { encodeWav, download, renderPattern } from './export/wav';
 import { exportMidi } from './export/midi';
@@ -199,7 +199,8 @@ async function boot() {
     const now = engine.now;
     if (s.mode === 'chord') chord.keyOn(note, vel, now);
     else if (s.mode === 'tape') {
-      if (!looper.playPitched(note, vel, now)) chord.keyOn(note, vel, now); // empty tape? still musical
+      // default: the harmony instrument plays over the loop; JAMMI flips keys to repitch it
+      if (!s.jammi || !looper.playPitched(note, vel, now)) chord.keyOn(note, vel, now);
     } else {
       // beat mode: keys play the scale-locked bass, live
       const n = snapToScale(note - 24, s.keyRoot, s.scale);
@@ -263,42 +264,85 @@ async function boot() {
   }
 
   // ---- knob/fader mapping per mode ----
-  function onKnob(i: number, value: number) {
-    const v = value / 127;
+  // Each knob is a normalized get/set pair, so absolute encoders (Arturia
+  // mode) and relative encoders (DAW mode) drive the same parameters.
+  interface KnobDef { get(): number; set(v: number): void }
+
+  function knobDefs(): KnobDef[] {
     const s = store.state;
+    const P = (p: Partial<AppState>) => store.patch(p);
     if (s.mode === 'chord') {
-      switch (i) {
-        case 0: store.patch({ extension: Math.round(v * 2) }); break;
-        case 1: store.patch({ spread: v }); break;
-        case 2: store.patch({ inversion: Math.round(v * 3) }); break;
-        case 3: store.patch({ chordOctave: (Math.round(v * 4) - 2) * 12 }); break;
-        case 4: store.patch({ brightness: v }); break;
-        case 5: store.patch({ release: v }); break;
-        case 6: store.patch({ arpRate: [4, 2, 1][Math.min(2, Math.floor(v * 3))] }); break;
-        case 7: store.patch({ vibe: v }); break;
-      }
+      return [
+        { get: () => s.extension / 2, set: (v) => P({ extension: Math.round(v * 2) }) },
+        { get: () => s.spread, set: (v) => P({ spread: v }) },
+        { get: () => s.inversion / 3, set: (v) => P({ inversion: Math.round(v * 3) }) },
+        { get: () => (s.chordOctave / 12 + 2) / 4, set: (v) => P({ chordOctave: (Math.round(v * 4) - 2) * 12 }) },
+        { get: () => s.brightness, set: (v) => P({ brightness: v }) },
+        { get: () => s.release, set: (v) => P({ release: v }) },
+        { get: () => [4, 2, 1].indexOf(s.arpRate) / 2, set: (v) => P({ arpRate: [4, 2, 1][Math.min(2, Math.floor(v * 3))] }) },
+        { get: () => s.vibe, set: (v) => P({ vibe: v }) },
+      ];
+    }
+    if (s.mode === 'beat') {
+      const tp = () => s.trackParams[selTrack];
+      return [
+        { get: () => (s.bpm - 60) / 120, set: (v) => P({ bpm: Math.round(60 + v * 120) }) },
+        { get: () => s.swing, set: (v) => P({ swing: v }) },
+        { get: () => tp().volume, set: (v) => { tp().volume = v; store.touch('grid'); } },
+        { get: () => (tp().pitch + 12) / 24, set: (v) => { tp().pitch = Math.round(v * 24) - 12; store.touch('grid'); } },
+        { get: () => tp().decay, set: (v) => { tp().decay = v; store.touch('grid'); } },
+        { get: () => s.vibe, set: (v) => P({ vibe: v }) },
+        { get: () => s.delaySend, set: (v) => P({ delaySend: v }) },
+        { get: () => s.reverbSend, set: (v) => P({ reverbSend: v }) },
+      ];
+    }
+    return [
+      { get: () => (s.tapeSpeed + 2) / 4, set: (v) => P({ tapeSpeed: Math.round((v * 4 - 2) * 20) / 20 }) },
+      { get: () => (s.overdubDecay - 0.3) / 0.7, set: (v) => P({ overdubDecay: 0.3 + v * 0.7 }) },
+      { get: () => [1, 2, 4, 8].indexOf(s.tapeBars) / 3, set: (v) => P({ tapeBars: [1, 2, 4, 8][Math.min(3, Math.floor(v * 4))] }) },
+      { get: () => s.vibe, set: (v) => P({ vibe: v }) },
+      { get: () => s.delaySend, set: (v) => P({ delaySend: v }) },
+      { get: () => s.reverbSend, set: (v) => P({ reverbSend: v }) },
+      { get: () => s.masterVolume, set: (v) => P({ masterVolume: v }) },
+      { get: () => s.brightness, set: (v) => P({ brightness: v }) },
+    ];
+  }
+
+  const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
+  function onKnobAbs(i: number, value: number) { knobDefs()[i]?.set(value / 127); }
+  function onKnobRel(i: number, delta: number) {
+    const d = knobDefs()[i];
+    if (d) d.set(clamp01(d.get() + delta * 0.04));
+  }
+
+  function applyFader(f: number, v: number) {
+    if (f === 0) store.patch({ masterVolume: v });
+    if (f === 1) store.patch({ delaySend: v });
+    if (f === 2) store.patch({ reverbSend: v });
+    if (f === 3) store.patch({ swing: v });
+  }
+
+  // ---- main encoder: hands-free navigation ----
+  // The big knob sends CC 28/29 (turn) + 118/119 (click) with the device in
+  // DAW mode (Shift+Pad3); in factory Arturia mode it only browses Analog Lab.
+  const MODES: Mode[] = ['chord', 'beat', 'tape'];
+  function mainTurn(delta: number) {
+    if (delta === 0) return;
+    const next = MODES[(MODES.indexOf(store.state.mode) + (delta > 0 ? 1 : -1) + 3) % 3];
+    setMode(next);
+  }
+  function mainShiftTurn(delta: number) {
+    if (delta === 0) return;
+    const s = store.state;
+    const d = delta > 0 ? 1 : -1;
+    if (s.mode === 'chord') {
+      store.patch({ keyRoot: (s.keyRoot + d + 12) % 12 });
     } else if (s.mode === 'beat') {
-      switch (i) {
-        case 0: store.patch({ bpm: Math.round(60 + v * 120) }); break;
-        case 1: store.patch({ swing: v }); break;
-        case 2: s.trackParams[selTrack].volume = v; store.touch('grid'); break;
-        case 3: s.trackParams[selTrack].pitch = Math.round(v * 24) - 12; store.touch('grid'); break;
-        case 4: s.trackParams[selTrack].decay = v; store.touch('grid'); break;
-        case 5: store.patch({ vibe: v }); break;
-        case 6: store.patch({ delaySend: v }); break;
-        case 7: store.patch({ reverbSend: v }); break;
-      }
+      selTrack = Math.max(0, Math.min(7, selTrack + d));
+      store.touch('grid');
+      ui.toast(`track: ${TRACK_NAMES[selTrack]}`);
     } else {
-      switch (i) {
-        case 0: store.patch({ tapeSpeed: Math.round((v * 4 - 2) * 20) / 20 }); break;
-        case 1: store.patch({ overdubDecay: 0.3 + v * 0.7 }); break;
-        case 2: store.patch({ tapeBars: [1, 2, 4, 8][Math.min(3, Math.floor(v * 4))] }); break;
-        case 3: store.patch({ vibe: v }); break;
-        case 4: store.patch({ delaySend: v }); break;
-        case 5: store.patch({ reverbSend: v }); break;
-        case 6: store.patch({ masterVolume: v }); break;
-        case 7: store.patch({ brightness: v }); break;
-      }
+      store.patch({ tapeSpeed: Math.max(-2, Math.min(2, Math.round((s.tapeSpeed + d * 0.05) * 20) / 20)) });
     }
   }
 
@@ -356,17 +400,22 @@ async function boot() {
       noteOff(e.a);
     } else if (e.type === 'cc') {
       const k = knobIndex(e.a);
-      if (k >= 0) { onKnob(k, e.b); return; }
+      if (k >= 0) { onKnobAbs(k, e.b); return; }
       const f = faderIndex(e.a);
-      if (f >= 0) {
-        const v = e.b / 127;
-        if (f === 0) store.patch({ masterVolume: v });
-        if (f === 1) store.patch({ delaySend: v });
-        if (f === 2) store.patch({ reverbSend: v });
-        if (f === 3) store.patch({ swing: v });
-        return;
-      }
-      if (e.a === MINILAB3.modCC) store.patch({ vibe: e.b / 127 });
+      if (f >= 0) { applyFader(f, e.b / 127); return; }
+      // DAW-mode surface (Shift+Pad3 on the device)
+      const dk = dawKnobIndex(e.a);
+      if (dk >= 0) { onKnobRel(dk, relDelta(e.b)); return; }
+      const df = dawFaderIndex(e.a);
+      if (df >= 0) { applyFader(df, e.b / 127); return; }
+      // main encoder
+      if (e.a === MINILAB3.mainTurnCC) { mainTurn(relDelta(e.b)); return; }
+      if (e.a === MINILAB3.mainShiftTurnCC) { mainShiftTurn(relDelta(e.b)); return; }
+      if (e.a === MINILAB3.mainClickCC) { if (e.b > 63) togglePlay(); return; }
+      if (e.a === MINILAB3.mainShiftClickCC) { if (e.b > 63) store.patch({ recording: !store.state.recording }); return; }
+      if (e.a === MINILAB3.shiftCC) return;
+      if (e.a === MINILAB3.modCC) { store.patch({ vibe: e.b / 127 }); return; }
+      console.debug('[plab] unmapped CC', e.channel, e.a, e.b);
     }
   });
   await midi.init();
@@ -381,10 +430,13 @@ async function boot() {
     if (ev.repeat) return;
     if ((ev.target as HTMLElement)?.tagName === 'INPUT' || (ev.target as HTMLElement)?.tagName === 'SELECT') return;
     const key = ev.key.toLowerCase();
-    if (key in KEYMAP) { noteOn(KEYMAP[key] + kbOctave * 12, 0.9); return; }
+    if (ev.shiftKey) {
+      if (key === 'r') { store.patch({ recording: !store.state.recording }); return; }
+      if (key === 't') { tapeRecordViaPad(); return; }
+    }
+    if (key in KEYMAP && !ev.shiftKey) { noteOn(KEYMAP[key] + kbOctave * 12, 0.9); return; }
     if (key >= '1' && key <= '8') { padHit(Number(key) - 1, 1); return; }
     if (key === ' ') { ev.preventDefault(); togglePlay(); return; }
-    if (key === 'r' && ev.shiftKey) { store.patch({ recording: !store.state.recording }); return; }
     if (key === 'z') { kbOctave = Math.max(-2, kbOctave - 1); ui.toast(`octave ${kbOctave}`); return; }
     if (key === 'x') { kbOctave = Math.min(2, kbOctave + 1); ui.toast(`octave ${kbOctave}`); return; }
     if (key === 'arrowright' || key === 'arrowleft') {
