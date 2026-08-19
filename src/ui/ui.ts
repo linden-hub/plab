@@ -269,7 +269,7 @@ export class UI {
 
     const footer = el('footer');
     footer.innerHTML =
-      `MiniLab 3 (DAW mode, ⇧+Pad3): <b>HOLD button = record a loop</b> (hold it while you play) · ⇧+HOLD = undo last loop · big knob: turn = switch keyboard, click = play/stop, ⇧+turn = key root / track / tape speed, ⇧+click = rec-arm the grid<br>` +
+      `MiniLab 3 (DAW mode, ⇧+Pad3): big knob — <b>press &amp; hold the click = record a loop</b> (release stops) · turn = switch keyboard · ⇧+click = play/stop · ⇧+turn = key root / track / tape speed<br>` +
       `pads always finger-drum (and write into the grid when ● REC is armed) · 8 knobs = the strip above · faders: master, delay, reverb, swing · mod strip: vibe<br>` +
       `knob mapping wrong? click a K-box, then turn the knob you want bound there — it sticks<br>` +
       `no controller? <kbd>A</kbd>–<kbd>;</kbd> piano · <kbd>W E T Y U</kbd> black keys · <kbd>1</kbd>–<kbd>8</kbd> pads · <kbd>space</kbd> play · hold <kbd>⇧T</kbd> record loop · <kbd>⇧R</kbd> rec-arm · <kbd>←</kbd><kbd>→</kbd> keyboard · <kbd>Z</kbd>/<kbd>X</kbd> octave · shift-click a BASS cell to cycle its degree`;

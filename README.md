@@ -39,10 +39,11 @@ No controller? Full computer-keyboard fallback: `A`–`;` piano (`W E T Y U` bla
 
 ## MiniLab 3 mapping (put the device in DAW mode: Shift+Pad3)
 
-- **HOLD button = the record-loop button.** Hold it while you play — on any keyboard —
-  release, and the take loops. **Shift+HOLD = undo the last loop.**
-- **Big knob**: turn = switch keyboard · click = play/stop · Shift+turn = key root (SYNTH,
-  CHORD) / selected track (DRUMS) / tape speed (JAMMI) · Shift+click = rec-arm the grid.
+- **Big knob click = the record-loop button.** Press and hold the click while you play — on
+  any keyboard — release, and the take loops. **Shift+click = play/stop.**
+- **Big knob turn** = switch keyboard · Shift+turn = key root (SYNTH, CHORD) / selected track
+  (DRUMS) / tape speed (JAMMI). (The device's own HOLD button engages a hardware mode, so the
+  app ignores it.)
 - **Pads 1–8**: always the drum kit; they write into the step grid when ● REC is armed.
 - **Faders 1–4**: master · delay · reverb · swing. **Mod strip**: vibe.
 - **Knobs 1–8** per keyboard:

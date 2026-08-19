@@ -512,18 +512,8 @@ async function boot() {
       }
       noteOff(e.a);
     } else if (e.type === 'cc') {
-      // HOLD button = the permanent record-loop button. Rising edge starts,
-      // falling edge stops — works whether the button is momentary or latching.
-      // Shift+HOLD = undo the last loop.
-      if (e.a === MINILAB3.sustainCC) {
-        if (e.b > 63) {
-          if (shiftHeld) looper.popLayer();
-          else tapeRecordStart();
-        } else if (!jammiRecording) {
-          looper.stopRecord();
-        }
-        return;
-      }
+      // The device's HOLD button engages a hardware mode of its own — ignore it.
+      if (e.a === MINILAB3.sustainCC) return;
       if (e.a === MINILAB3.shiftCC) { shiftHeld = e.b > 63; return; }
       const k = knobIndex(e.a);
       if (k >= 0) { routeKnobCC('main', e.a, e.b, 'abs', k); return; }
@@ -534,11 +524,16 @@ async function boot() {
       if (dk >= 0) { routeKnobCC('main', e.a, e.b, 'rel', dk); return; }
       const df = dawFaderIndex(e.a);
       if (df >= 0) { applyFader(df, e.b / 127); return; }
-      // main encoder
+      // main encoder — CLICK-AND-HOLD records a loop (press starts, release
+      // stops); Shift+click is play/stop.
       if (e.a === MINILAB3.mainTurnCC) { mainTurn(relDelta(e.b)); return; }
       if (e.a === MINILAB3.mainShiftTurnCC) { mainShiftTurn(relDelta(e.b)); return; }
-      if (e.a === MINILAB3.mainClickCC) { if (e.b > 63) togglePlay(); return; }
-      if (e.a === MINILAB3.mainShiftClickCC) { if (e.b > 63) store.patch({ recording: !store.state.recording }); return; }
+      if (e.a === MINILAB3.mainClickCC) {
+        if (e.b > 63) tapeRecordStart();
+        else if (!jammiRecording) looper.stopRecord();
+        return;
+      }
+      if (e.a === MINILAB3.mainShiftClickCC) { if (e.b > 63) togglePlay(); return; }
       if (e.a === MINILAB3.modCC) { store.patch({ vibe: e.b / 127 }); return; }
       console.debug('[plab] unmapped CC', e.source, e.channel, e.a, e.b);
     }
