@@ -25,16 +25,38 @@ export class ChordMode {
   perf: PerfNote[] = [];
   private perfOpen = new Map<string, PerfNote>();
 
+  // Free-running arp scheduler for when the transport is stopped — the arp
+  // must not depend on the step grid being in use.
+  private arpNextTime = 0;
+  private freeStep = 0;
+
   constructor(
     private store: Store,
     private clock: Clock,
-    ctx: AudioContext,
+    private ctx: AudioContext,
     dest: AudioNode,
   ) {
     this.chords = new PolySynth(ctx, dest, PRESETS.warm, 16);
     this.bassSynth = new PolySynth(ctx, dest, PRESETS.bass, 2);
     this.arpSynth = new PolySynth(ctx, dest, PRESETS.pluck, 4);
     clock.onStep((step, time) => this.onStep(step, time));
+    window.setInterval(() => this.freeTick(), 25);
+  }
+
+  /** Lookahead arp scheduling while the transport clock is NOT running. */
+  private freeTick() {
+    if (this.clock.running) { this.arpNextTime = 0; return; }
+    const s = this.store.state;
+    if (!s.arpOn || this.held.size === 0) { this.arpNextTime = 0; return; }
+    const now = this.ctx.currentTime;
+    if (this.arpNextTime === 0 || this.arpNextTime < now - 0.2) {
+      this.arpNextTime = now + 0.02;
+      this.freeStep = 0;
+    }
+    while (this.arpNextTime < now + 0.12) {
+      this.scheduleArp(this.freeStep++, this.arpNextTime);
+      this.arpNextTime += this.clock.stepDur;
+    }
   }
 
   keyOn(midiNote: number, vel: number, now: number) {
@@ -83,6 +105,10 @@ export class ChordMode {
   }
 
   private onStep(step: number, time: number) {
+    this.scheduleArp(step, time);
+  }
+
+  private scheduleArp(step: number, time: number) {
     const s = this.store.state;
     if (!s.arpOn || this.held.size === 0) return;
     if (step % Math.max(1, Math.round(s.arpRate)) !== 0) return;
