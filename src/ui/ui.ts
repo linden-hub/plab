@@ -37,8 +37,10 @@ export interface UIHooks {
   heldNotes(): Set<number>;
 }
 
-const KB_LOW = 60; // C4
-const KB_KEYS = 24;
+// Mirror the MiniLab 3's 25 keys at their default octave: C3–C5 (48–72),
+// 15 white keys including the top C.
+const KB_LOW = 48;
+const KB_KEYS = 25;
 
 export class UI {
   private root: HTMLElement;
@@ -245,7 +247,7 @@ export class UI {
 
   private buildKeyboard(): HTMLElement {
     const kb = el('div', 'kb');
-    const whiteCount = 14;
+    const whiteCount = 15;
     let whiteIdx = 0;
     const DEG = ['I', '', 'II', '', 'III', 'IV', '', 'V', '', 'VI', '', 'VII'];
     for (let i = 0; i < KB_KEYS; i++) {
