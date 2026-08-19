@@ -89,7 +89,9 @@ async function boot() {
     selectTrack: (i) => { selTrack = i; store.touch('grid'); },
     selectedTrack: () => selTrack,
     playhead: () => (store.state.playing ? seq.playhead : -1),
-    tapeRecord: () => tapeRecordToggle(),
+    padRelease: (i) => padRelease(i),
+    tapeRecordStart: () => tapeRecordStart(),
+    tapeRecordStop: () => looper.stopRecord(),
     tapeUndo: () => looper.popLayer(),
     tapeClear: () => looper.clear(),
     tapeInfo: () => ({
@@ -97,6 +99,7 @@ async function boot() {
       recState: looper.recState,
       speed: looper.speed,
       hasLoop: looper.loopDur > 0,
+      loopSec: looper.loopDur,
     }),
     toggleMic() {
       if (looper.micEnabled) looper.disableMic();
@@ -235,7 +238,7 @@ async function boot() {
       else store.patch({ arpOn: !s.arpOn });
     } else {
       // tape transport on pads
-      if (i === 0) tapeRecordToggle();
+      if (i === 0) tapeRecordStart(); // held pad records; padRelease() stops
       else if (i === 1) looper.popLayer();
       else if (i === 2) store.patch({ tapeSpeed: -store.state.tapeSpeed });
       else if (i === 3) store.patch({ tapeSpeed: 1 });
@@ -243,13 +246,16 @@ async function boot() {
     }
   }
 
-  // Chompi-style: press = start recording NOW; press again = that exact span
-  // becomes the loop (or ends the overdub). No bar grid, no transport needed.
-  function tapeRecordToggle() {
-    if (looper.recState === 'recording') { looper.stopRecord(); return; }
-    if (looper.recState !== 'idle') { looper.cancelRecord(); return; }
+  // Chompi-style hold-to-record: press starts NOW, release sets the loop
+  // (or ends the overdub). No bar grid, no transport needed.
+  function tapeRecordStart() {
+    if (looper.recState !== 'idle') return;
     looper.decayAmount = store.state.overdubDecay;
     looper.record();
+  }
+
+  function padRelease(i: number) {
+    if (store.state.mode === 'tape' && i === 0) looper.stopRecord();
   }
 
   // ---- mode switching + hardware feedback ----
@@ -450,7 +456,11 @@ async function boot() {
       }
       noteOn(e.a, e.b / 127);
     } else if (e.type === 'noteoff') {
-      if (e.channel === MINILAB3.padChannel) return;
+      if (e.channel === MINILAB3.padChannel) {
+        const i = padIndex(e.a);
+        if (i >= 0) padRelease(i);
+        return;
+      }
       noteOff(e.a);
     } else if (e.type === 'cc') {
       const k = knobIndex(e.a);
@@ -486,7 +496,7 @@ async function boot() {
     const key = ev.key.toLowerCase();
     if (ev.shiftKey) {
       if (key === 'r') { store.patch({ recording: !store.state.recording }); return; }
-      if (key === 't') { tapeRecordToggle(); return; }
+      if (key === 't') { tapeRecordStart(); return; } // hold ⇧T; keyup stops
     }
     if (key in KEYMAP && !ev.shiftKey) { noteOn(KEYMAP[key] + kbOctave * 12, 0.9); return; }
     if (key >= '1' && key <= '8') { padHit(Number(key) - 1, 1); return; }
@@ -501,7 +511,9 @@ async function boot() {
   });
   window.addEventListener('keyup', (ev) => {
     const key = ev.key.toLowerCase();
+    if (key === 't' && looper.recState === 'recording') { looper.stopRecord(); return; }
     if (key in KEYMAP) noteOff(KEYMAP[key] + kbOctave * 12);
+    if (key >= '1' && key <= '8') padRelease(Number(key) - 1);
   });
 
   ui.update();

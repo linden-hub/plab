@@ -145,10 +145,14 @@ export class Looper {
 
   private commit(chunks: [Float32Array, Float32Array][], startT: number, endT: number) {
     const total = chunks.reduce((n, c) => n + c[0].length, 0);
-    if (total < 512) { this.recState = 'idle'; this.onChange(); return; }
-
     const isFirst = this.loopDur === 0;
     const sr = this.ctx.sampleRate;
+    // Accidental taps make useless sub-150ms loops — discard them.
+    if (total < 512 || (isFirst && total < sr * 0.15)) {
+      this.recState = 'idle';
+      this.onChange();
+      return;
+    }
     // Overdubs are padded with silence to exactly one loop so every layer tiles.
     const len = isFirst ? total : Math.round(this.loopDur * sr);
     const buf = this.ctx.createBuffer(2, len, sr);

@@ -18,11 +18,13 @@ export interface UIHooks {
   selectTrack(i: number): void;
   selectedTrack(): number;
   playhead(): number;
-  // tape
-  tapeRecord(): void;
+  padRelease(i: number): void;
+  // tape (hold-to-record: start on press, stop on release)
+  tapeRecordStart(): void;
+  tapeRecordStop(): void;
   tapeUndo(): void;
   tapeClear(): void;
-  tapeInfo(): { layers: number; recState: string; speed: number; hasLoop: boolean };
+  tapeInfo(): { layers: number; recState: string; speed: number; hasLoop: boolean; loopSec: number };
   toggleMic(): void;
   micOn(): boolean;
   // header extras
@@ -91,8 +93,9 @@ export class UI {
     this.els.bpmLab = bpmLab;
     (this.els.bpmIn as unknown as HTMLInputElement) = bpmIn as unknown as HTMLElement & HTMLInputElement;
     bpmWrap.append(bpmLab, bpmIn);
-    const tapeHdr = button('● TAPE', () => h.tapeRecord());
-    tapeHdr.title = 'record the tape loop from any mode (⇧T)';
+    const tapeHdr = button('● TAPE', () => {});
+    tapeHdr.title = 'HOLD to record the tape loop from any mode (hold ⇧T)';
+    holdToRecord(tapeHdr, h);
     this.els.tapeHdr = tapeHdr;
     transport.append(bpmWrap, play, rec, tapeHdr,
       button('WAV·LOOP', () => h.exportLoopWav()),
@@ -176,7 +179,10 @@ export class UI {
       }));
     const pads = el('div', 'pads');
     for (let i = 0; i < 8; i++) {
-      const b = button(TRACK_NAMES[i], () => h.padHit(i, 1));
+      const b = button(TRACK_NAMES[i], () => {});
+      b.addEventListener('pointerdown', (ev) => { ev.preventDefault(); h.padHit(i, 1); });
+      b.addEventListener('pointerup', () => h.padRelease(i));
+      b.addEventListener('pointerleave', () => h.padRelease(i));
       pads.appendChild(b);
       this.padEls.push(b);
     }
@@ -194,7 +200,9 @@ export class UI {
     reels.append(reelL, tapeStatus, el('span', 'spacer'), layerBox, reelR);
 
     const tapeRow = el('div', 'row');
-    const recBtn = button('● RECORD', () => h.tapeRecord());
+    const recBtn = button('● RECORD', () => {});
+    recBtn.title = 'HOLD to record — release to set the loop';
+    holdToRecord(recBtn, h);
     this.els.tapeRec = recBtn;
     const speedIn = document.createElement('input');
     speedIn.type = 'range'; speedIn.min = '-2'; speedIn.max = '2'; speedIn.step = '0.05';
@@ -214,7 +222,7 @@ export class UI {
       button('UNDO', () => h.tapeUndo()),
       button('CLEAR', () => h.tapeClear()));
     const tapeHint = el('div', 'row');
-    tapeHint.innerHTML = `<span style="color:var(--dim);font-size:11px">free-form tape: press record, play, press stop — that exact take becomes the loop, at its own length · overdubs punch in the moment you press · keys play chords over the loop (JAMMI flips them to repitch it, C4 = original) · ● TAPE in the header works from any mode</span>`;
+    tapeHint.innerHTML = `<span style="color:var(--dim);font-size:11px">free-form tape: HOLD record (button, pad 1, or ⇧T) while you play, release to set the loop — exactly what you held is what loops · hold again to overdub · keys play chords over the loop (JAMMI flips them to repitch it, C4 = original)</span>`;
     tapePanel.append(reels, tapeRow, tapeHint, this.buildKeyboard());
     this.els.tapePanel = tapePanel;
 
@@ -354,9 +362,8 @@ export class UI {
     this.els.jammiBtn.className = s.jammi ? 'lit' : '';
     const t = h.tapeInfo();
     this.els.tapeRec.className = t.recState === 'recording' ? 'rec-lit' : '';
-    this.els.tapeRec.textContent = t.recState === 'recording' ? '■ STOP' : t.hasLoop ? '● OVERDUB' : '● RECORD';
+    this.els.tapeRec.textContent = t.recState === 'recording' ? '● RECORDING…' : t.hasLoop ? '● HOLD TO OVERDUB' : '● HOLD TO RECORD';
     this.els.tapeHdr.className = t.recState === 'recording' ? 'rec-lit' : '';
-    this.els.tapeHdr.textContent = t.recState === 'recording' ? '■ TAPE' : '● TAPE';
     this.els.layerBox.innerHTML = '';
     for (let i = 0; i < t.layers; i++) this.els.layerBox.appendChild(el('div', 'layer-chip'));
 
@@ -414,9 +421,9 @@ export class UI {
       });
       const st = h.tapeInfo();
       this.els.tapeStatus.textContent =
-        st.recState === 'recording' ? (st.hasLoop ? 'overdubbing…' : 'recording… press again to set the loop')
-        : st.hasLoop ? `${st.layers} layer${st.layers === 1 ? '' : 's'} · ×${st.speed.toFixed(2)}`
-        : 'empty tape';
+        st.recState === 'recording' ? (st.hasLoop ? 'overdubbing… release to stop' : 'recording… release to set the loop')
+        : st.hasLoop ? `${st.layers} layer${st.layers === 1 ? '' : 's'} · ${st.loopSec.toFixed(1)}s · ×${st.speed.toFixed(2)}`
+        : 'empty tape — hold record and play';
       this.els.tapeStatus.className = 'tape-status' + (st.recState === 'recording' ? ' rec' : '');
     }
 
@@ -435,6 +442,12 @@ function button(label: string, onClick: () => void): HTMLElement {
   b.textContent = label;
   b.onclick = onClick;
   return b;
+}
+
+function holdToRecord(btn: HTMLElement, h: UIHooks) {
+  btn.addEventListener('pointerdown', (ev) => { ev.preventDefault(); h.tapeRecordStart(); });
+  btn.addEventListener('pointerup', () => h.tapeRecordStop());
+  btn.addEventListener('pointerleave', () => h.tapeRecordStop());
 }
 
 function ctl(label: string, input: HTMLElement): HTMLElement {
