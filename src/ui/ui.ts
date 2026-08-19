@@ -222,7 +222,7 @@ export class UI {
       button('UNDO', () => h.tapeUndo()),
       button('CLEAR', () => h.tapeClear()));
     const tapeHint = el('div', 'row');
-    tapeHint.innerHTML = `<span style="color:var(--dim);font-size:11px">free-form tape: HOLD record (button, pad 1, or ⇧T) while you play, release to set the loop — exactly what you held is what loops · hold again to overdub · keys play chords over the loop (JAMMI flips them to repitch it, C4 = original)</span>`;
+    tapeHint.innerHTML = `<span style="color:var(--dim);font-size:11px">every take is its own loop: HOLD record (button, pad 1, or ⇧T) while you play, release — that exact take loops at its own length, layered over the others, drifting freely · keys play chords on top (JAMMI flips them to repitch the tape, C4 = original)</span>`;
     tapePanel.append(reels, tapeRow, tapeHint, this.buildKeyboard());
     this.els.tapePanel = tapePanel;
 
@@ -362,7 +362,7 @@ export class UI {
     this.els.jammiBtn.className = s.jammi ? 'lit' : '';
     const t = h.tapeInfo();
     this.els.tapeRec.className = t.recState === 'recording' ? 'rec-lit' : '';
-    this.els.tapeRec.textContent = t.recState === 'recording' ? '● RECORDING…' : t.hasLoop ? '● HOLD TO OVERDUB' : '● HOLD TO RECORD';
+    this.els.tapeRec.textContent = t.recState === 'recording' ? '● RECORDING…' : t.hasLoop ? '● HOLD TO LAYER' : '● HOLD TO RECORD';
     this.els.tapeHdr.className = t.recState === 'recording' ? 'rec-lit' : '';
     this.els.layerBox.innerHTML = '';
     for (let i = 0; i < t.layers; i++) this.els.layerBox.appendChild(el('div', 'layer-chip'));
@@ -421,8 +421,8 @@ export class UI {
       });
       const st = h.tapeInfo();
       this.els.tapeStatus.textContent =
-        st.recState === 'recording' ? (st.hasLoop ? 'overdubbing… release to stop' : 'recording… release to set the loop')
-        : st.hasLoop ? `${st.layers} layer${st.layers === 1 ? '' : 's'} · ${st.loopSec.toFixed(1)}s · ×${st.speed.toFixed(2)}`
+        st.recState === 'recording' ? 'recording… release to drop the loop'
+        : st.hasLoop ? `${st.layers} loop${st.layers === 1 ? '' : 's'} · longest ${st.loopSec.toFixed(1)}s · ×${st.speed.toFixed(2)}`
         : 'empty tape — hold record and play';
       this.els.tapeStatus.className = 'tape-status' + (st.recState === 'recording' ? ' rec' : '');
     }

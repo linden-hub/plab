@@ -62,7 +62,6 @@ function snapshotAudio(looper: Looper): AudioSnapshot {
       sampleRate: l.buffer.sampleRate,
       length: l.buffer.length,
       gain: l.level,
-      phaseOffset: l.phaseOffset,
       ch0: l.buffer.getChannelData(0).slice().buffer,
       ch1: l.buffer.getChannelData(Math.min(1, l.buffer.numberOfChannels - 1)).slice().buffer,
     })),
@@ -77,7 +76,7 @@ function restoreAudio(ctx: AudioContext, looper: Looper, snap: AudioSnapshot | u
     buf.getChannelData(1).set(new Float32Array(sl.ch1));
     return buf;
   });
-  looper.restore(buffers, snap.layers.map((l) => l.gain), snap.layers.map((l) => l.phaseOffset ?? 0), snap.loopDur);
+  looper.restore(buffers, snap.layers.map((l) => l.gain));
 }
 
 /** Serializable subset of state (transport flags reset on load). */
