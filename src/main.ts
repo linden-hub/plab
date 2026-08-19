@@ -1,0 +1,409 @@
+// PLAYLAB — boot + wiring. One harmonic brain, one clock, three play modes.
+
+import './style.css';
+import { Store, type AppState, type Mode, NUM_STEPS, TRACK_NAMES } from './state';
+import { AudioEngine } from './audio/engine';
+import { Clock } from './sequencer/clock';
+import { Sequencer, BASS_TRACK } from './sequencer/sequencer';
+import { ChordMode } from './modes/chord';
+import { Looper } from './looper/looper';
+import { MidiManager } from './midi/midi';
+import { MINILAB3, padIndex, knobIndex, faderIndex, padColorSysex, oledTextSysex } from './midi/minilab3';
+import { SessionManager } from './persist/session';
+import { encodeWav, download, renderPattern } from './export/wav';
+import { exportMidi } from './export/midi';
+import { snapToScale, degreeToMidi, SCALE_LIST } from './theory/harmony';
+import { UI } from './ui/ui';
+
+const app = document.getElementById('app')!;
+
+// Browsers require a user gesture before audio — a friendly front door.
+const overlay = document.createElement('div');
+overlay.className = 'overlay';
+overlay.innerHTML = `
+  <h1>PLAY<em>LAB</em></h1>
+  <p>a music &amp; sound-design playground for your MiniLab&nbsp;3.<br>
+  chords you can't get wrong · beats on pads · a tape loop that eats everything.</p>
+`;
+const startBtn = document.createElement('button');
+startBtn.className = 'primary';
+startBtn.textContent = 'press start';
+overlay.appendChild(startBtn);
+document.body.appendChild(overlay);
+
+startBtn.onclick = () => boot().catch((e) => {
+  console.error(e);
+  alert('boot failed: ' + e);
+});
+
+async function boot() {
+  overlay.remove();
+
+  const engine = new AudioEngine();
+  await engine.resume();
+
+  const store = new Store();
+  const clock = new Clock(engine.ctx);
+  const seq = new Sequencer(store, clock, engine.ctx, engine.sum);
+  const chord = new ChordMode(store, clock, engine.ctx, engine.sum);
+  const looper = new Looper(engine.ctx, engine.recordTap, engine.loopIn);
+  await looper.init();
+  const midi = new MidiManager();
+  const session = new SessionManager(engine.ctx, looper);
+
+  // ---- restore last session ----
+  const saved = session.loadAutosaveState();
+  if (saved) store.patch(saved);
+  await session.loadAutosaveAudio();
+  applyAudioParams(store.state);
+
+  let selTrack = 0;
+  const held = new Set<number>();
+
+  // ---- UI ----
+  const ui = new UI({
+    state: () => store.state,
+    noteOn, noteOff,
+    padHit: (i, vel) => padHit(i, vel),
+    setMode,
+    togglePlay, toggleRec: () => store.patch({ recording: !store.state.recording }),
+    patch: (p) => store.patch(p),
+    toggleCell(track, step, shift) {
+      if (track < 0) { store.touch('grid'); return; }
+      const s = store.state;
+      if (track === BASS_TRACK && shift) {
+        s.bassSteps[step] = ((s.bassSteps[step] + 2) % 8) - 1; // -1,0..6 cycle
+        s.grid[track][step].on = s.bassSteps[step] >= -1;
+      } else {
+        s.grid[track][step].on = !s.grid[track][step].on;
+      }
+      selTrack = track;
+      store.touch('grid');
+    },
+    selectTrack: (i) => { selTrack = i; store.touch('grid'); },
+    selectedTrack: () => selTrack,
+    playhead: () => (store.state.playing ? seq.playhead : -1),
+    tapeRecord() {
+      if (looper.recState !== 'idle') { looper.cancelRecord(); return; }
+      const s = store.state;
+      if (!s.playing) togglePlay(); // tape syncs to the transport grid
+      looper.decayAmount = s.overdubDecay;
+      const barDur = clock.barDur();
+      looper.record(barDur * s.tapeBars, clock.nextBarTime());
+    },
+    tapeUndo: () => looper.popLayer(),
+    tapeClear: () => looper.clear(),
+    tapeInfo: () => ({
+      layers: looper.layers.length,
+      recState: looper.recState,
+      speed: looper.speed,
+      hasLoop: looper.loopDur > 0,
+    }),
+    toggleMic() {
+      if (looper.micEnabled) looper.disableMic();
+      else looper.enableMic().then((ok) => { if (!ok) ui.toast('mic permission denied'); });
+    },
+    micOn: () => looper.micEnabled,
+    midiStatus: () => ({ connected: midi.connected, name: midi.deviceName }),
+    exportLoopWav() {
+      const mix = looper.mixdown();
+      if (!mix) { ui.toast('no loop recorded yet'); return; }
+      download(encodeWav(mix), `playlab-loop-${stamp()}.wav`);
+      ui.toast('loop.wav exported — drop it on a REAPER track');
+    },
+    async exportBeatWav() {
+      ui.toast('rendering pattern…');
+      const buf = await renderPattern(store.state, 2);
+      download(encodeWav(buf), `playlab-beat-${stamp()}.wav`);
+      ui.toast('beat.wav exported (2 bars, dry)');
+    },
+    exportMidiFile() {
+      download(exportMidi(store.state, chord.perf, 1), `playlab-${stamp()}.mid`);
+      ui.toast('MIDI exported — grid + chord performance');
+    },
+    saveSession() {
+      const name = window.prompt('save session as:', 'jam-' + stamp());
+      if (!name) return;
+      session.saveSlot(name, store.state).then(() => ui.toast(`saved "${name}"`));
+    },
+    loadSession() {
+      const slots = session.listSlots();
+      if (!slots.length) { ui.toast('no saved sessions yet'); return; }
+      const name = window.prompt(`load which session?\n${slots.join(', ')}`, slots[slots.length - 1]);
+      if (!name) return;
+      session.loadSlot(name).then((s) => {
+        if (!s) { ui.toast(`no session named "${name}"`); return; }
+        if (store.state.playing) togglePlay();
+        store.patch(s);
+        applyAudioParams(store.state);
+        ui.toast(`loaded "${name}"`);
+      });
+    },
+    knobLabels: () => knobReadout(store.state),
+    currentChordLabel: () => chord.current?.label ?? null,
+    heldNotes: () => held,
+  }, app);
+
+  // ---- store side effects ----
+  store.subscribe((s, changed) => {
+    if (changed.has('bpm')) clock.bpm = s.bpm;
+    if (changed.has('swing')) clock.swing = s.swing;
+    if (changed.has('vibe')) engine.setVibe(s.vibe);
+    if (changed.has('delaySend')) engine.setDelaySend(s.delaySend);
+    if (changed.has('reverbSend')) engine.setReverbSend(s.reverbSend);
+    if (changed.has('masterVolume')) engine.setMasterVolume(s.masterVolume);
+    if (changed.has('bpm')) engine.setDelayTime(60 / s.bpm * 0.75); // dotted 8th
+    if (changed.has('tapeSpeed')) looper.setSpeed(s.tapeSpeed);
+    if (changed.has('overdubDecay')) looper.decayAmount = s.overdubDecay;
+    if (changed.has('brightness') || changed.has('release')) chord.applyMacros();
+    if (changed.has('mode')) syncHardware(s);
+    session.scheduleAutosave(s);
+    ui.update();
+  });
+
+  function applyAudioParams(s: AppState) {
+    clock.bpm = s.bpm;
+    clock.swing = s.swing;
+    engine.setVibe(s.vibe);
+    engine.setDelaySend(s.delaySend);
+    engine.setReverbSend(s.reverbSend);
+    engine.setMasterVolume(s.masterVolume);
+    engine.setDelayTime(60 / s.bpm * 0.75);
+    looper.decayAmount = s.overdubDecay;
+    chord.applyMacros();
+  }
+
+  // loop audio autosave when the layer count settles
+  let lastLayerCount = looper.layers.length;
+  looper.onChange = () => {
+    ui.update();
+    if (looper.recState === 'idle' && looper.layers.length !== lastLayerCount) {
+      lastLayerCount = looper.layers.length;
+      void session.autosaveAudio();
+    }
+  };
+
+  // ---- transport ----
+  function togglePlay() {
+    const playing = !store.state.playing;
+    if (playing) clock.start();
+    else { clock.stop(); seq.stopped(); chord.clearPerf(); }
+    store.patch({ playing });
+  }
+
+  // ---- note routing (MIDI keys, on-screen keys, computer keys) ----
+  function noteOn(note: number, vel: number) {
+    if (held.has(note)) return;
+    held.add(note);
+    const s = store.state;
+    const now = engine.now;
+    if (s.mode === 'chord') chord.keyOn(note, vel, now);
+    else if (s.mode === 'tape') {
+      if (!looper.playPitched(note, vel, now)) chord.keyOn(note, vel, now); // empty tape? still musical
+    } else {
+      // beat mode: keys play the scale-locked bass, live
+      const n = snapToScale(note - 24, s.keyRoot, s.scale);
+      seq.bass.noteOn(n, vel, now);
+    }
+  }
+
+  function noteOff(note: number) {
+    if (!held.delete(note)) return;
+    const s = store.state;
+    const now = engine.now;
+    if (s.mode === 'chord' || s.mode === 'tape') chord.keyOff(note, now);
+    if (s.mode === 'beat') seq.bass.noteOff(snapToScale(note - 24, s.keyRoot, s.scale), now);
+  }
+
+  // ---- pads per mode ----
+  function padHit(i: number, vel: number) {
+    const s = store.state;
+    ui.padFlash(i);
+    if (s.mode === 'beat') {
+      seq.padHit(i, vel, engine.now);
+    } else if (s.mode === 'chord') {
+      if (i < 6) { store.patch({ scale: SCALE_LIST[i] }); ui.toast(`scale: ${SCALE_LIST[i]}`); }
+      else if (i === 6) store.patch({ bassOn: !s.bassOn });
+      else store.patch({ arpOn: !s.arpOn });
+    } else {
+      // tape transport on pads
+      if (i === 0) tapeRecordViaPad();
+      else if (i === 1) looper.popLayer();
+      else if (i === 2) store.patch({ tapeSpeed: -store.state.tapeSpeed });
+      else if (i === 3) store.patch({ tapeSpeed: 1 });
+      else if (i >= 4) seq.padHit(i, vel, engine.now); // bonus: drums still reachable on tape
+    }
+  }
+
+  function tapeRecordViaPad() {
+    if (looper.recState !== 'idle') { looper.cancelRecord(); return; }
+    const s = store.state;
+    if (!s.playing) togglePlay();
+    looper.decayAmount = s.overdubDecay;
+    looper.record(clock.barDur() * s.tapeBars, clock.nextBarTime());
+  }
+
+  // ---- mode switching + hardware feedback ----
+  function setMode(m: Mode) {
+    chord.allOff(engine.now);
+    store.patch({ mode: m });
+  }
+
+  const MODE_COLORS: Record<Mode, [number, number, number]> = {
+    chord: [64, 32, 127],
+    beat: [127, 30, 8],
+    tape: [0, 110, 90],
+  };
+
+  function syncHardware(s: AppState) {
+    const [r, g, b] = MODE_COLORS[s.mode];
+    for (let i = 0; i < 8; i++) midi.sendSysex(padColorSysex(i, r, g, b));
+    const line2 = s.mode === 'chord' ? 'keys = chords' : s.mode === 'beat' ? 'pads = drums' : 'pad1 = record';
+    midi.sendSysex(oledTextSysex(`PLAYLAB ${s.mode.toUpperCase()}`, line2));
+  }
+
+  // ---- knob/fader mapping per mode ----
+  function onKnob(i: number, value: number) {
+    const v = value / 127;
+    const s = store.state;
+    if (s.mode === 'chord') {
+      switch (i) {
+        case 0: store.patch({ extension: Math.round(v * 2) }); break;
+        case 1: store.patch({ spread: v }); break;
+        case 2: store.patch({ inversion: Math.round(v * 3) }); break;
+        case 3: store.patch({ chordOctave: (Math.round(v * 4) - 2) * 12 }); break;
+        case 4: store.patch({ brightness: v }); break;
+        case 5: store.patch({ release: v }); break;
+        case 6: store.patch({ arpRate: [4, 2, 1][Math.min(2, Math.floor(v * 3))] }); break;
+        case 7: store.patch({ vibe: v }); break;
+      }
+    } else if (s.mode === 'beat') {
+      switch (i) {
+        case 0: store.patch({ bpm: Math.round(60 + v * 120) }); break;
+        case 1: store.patch({ swing: v }); break;
+        case 2: s.trackParams[selTrack].volume = v; store.touch('grid'); break;
+        case 3: s.trackParams[selTrack].pitch = Math.round(v * 24) - 12; store.touch('grid'); break;
+        case 4: s.trackParams[selTrack].decay = v; store.touch('grid'); break;
+        case 5: store.patch({ vibe: v }); break;
+        case 6: store.patch({ delaySend: v }); break;
+        case 7: store.patch({ reverbSend: v }); break;
+      }
+    } else {
+      switch (i) {
+        case 0: store.patch({ tapeSpeed: Math.round((v * 4 - 2) * 20) / 20 }); break;
+        case 1: store.patch({ overdubDecay: 0.3 + v * 0.7 }); break;
+        case 2: store.patch({ tapeBars: [1, 2, 4, 8][Math.min(3, Math.floor(v * 4))] }); break;
+        case 3: store.patch({ vibe: v }); break;
+        case 4: store.patch({ delaySend: v }); break;
+        case 5: store.patch({ reverbSend: v }); break;
+        case 6: store.patch({ masterVolume: v }); break;
+        case 7: store.patch({ brightness: v }); break;
+      }
+    }
+  }
+
+  function knobReadout(s: AppState): { label: string; value: string; norm: number }[] {
+    if (s.mode === 'chord') {
+      return [
+        { label: 'EXT', value: ['triad', '7th', '9th'][s.extension] ?? 'triad', norm: s.extension / 2 },
+        { label: 'SPREAD', value: pct(s.spread), norm: s.spread },
+        { label: 'INV', value: String(s.inversion), norm: s.inversion / 3 },
+        { label: 'OCT', value: String(s.chordOctave / 12), norm: (s.chordOctave / 12 + 2) / 4 },
+        { label: 'BRIGHT', value: pct(s.brightness), norm: s.brightness },
+        { label: 'RELEASE', value: pct(s.release), norm: s.release },
+        { label: 'ARP', value: s.arpRate === 1 ? '16th' : s.arpRate === 2 ? '8th' : '1/4', norm: 1 - (s.arpRate - 1) / 3 },
+        { label: 'VIBE', value: pct(s.vibe), norm: s.vibe },
+      ];
+    }
+    if (s.mode === 'beat') {
+      const p = s.trackParams[selTrack];
+      const t = TRACK_NAMES[selTrack];
+      return [
+        { label: 'BPM', value: String(s.bpm), norm: (s.bpm - 60) / 120 },
+        { label: 'SWING', value: pct(s.swing), norm: s.swing },
+        { label: `${t} VOL`, value: pct(p.volume), norm: p.volume },
+        { label: `${t} PITCH`, value: (p.pitch >= 0 ? '+' : '') + p.pitch, norm: (p.pitch + 12) / 24 },
+        { label: `${t} DECAY`, value: pct(p.decay), norm: p.decay },
+        { label: 'VIBE', value: pct(s.vibe), norm: s.vibe },
+        { label: 'DELAY', value: pct(s.delaySend), norm: s.delaySend },
+        { label: 'REVERB', value: pct(s.reverbSend), norm: s.reverbSend },
+      ];
+    }
+    return [
+      { label: 'SPEED', value: '×' + s.tapeSpeed.toFixed(2), norm: (s.tapeSpeed + 2) / 4 },
+      { label: 'DECAY', value: pct(s.overdubDecay), norm: (s.overdubDecay - 0.3) / 0.7 },
+      { label: 'BARS', value: String(s.tapeBars), norm: [1, 2, 4, 8].indexOf(s.tapeBars) / 3 },
+      { label: 'VIBE', value: pct(s.vibe), norm: s.vibe },
+      { label: 'DELAY', value: pct(s.delaySend), norm: s.delaySend },
+      { label: 'REVERB', value: pct(s.reverbSend), norm: s.reverbSend },
+      { label: 'MASTER', value: pct(s.masterVolume), norm: s.masterVolume },
+      { label: 'BRIGHT', value: pct(s.brightness), norm: s.brightness },
+    ];
+  }
+
+  // ---- MIDI wiring ----
+  midi.onStatus(() => { ui.update(); syncHardware(store.state); });
+  midi.onMessage((e) => {
+    if (e.type === 'noteon') {
+      if (e.channel === MINILAB3.padChannel) {
+        const i = padIndex(e.a);
+        if (i >= 0) padHit(i, e.b / 127);
+        return;
+      }
+      noteOn(e.a, e.b / 127);
+    } else if (e.type === 'noteoff') {
+      if (e.channel === MINILAB3.padChannel) return;
+      noteOff(e.a);
+    } else if (e.type === 'cc') {
+      const k = knobIndex(e.a);
+      if (k >= 0) { onKnob(k, e.b); return; }
+      const f = faderIndex(e.a);
+      if (f >= 0) {
+        const v = e.b / 127;
+        if (f === 0) store.patch({ masterVolume: v });
+        if (f === 1) store.patch({ delaySend: v });
+        if (f === 2) store.patch({ reverbSend: v });
+        if (f === 3) store.patch({ swing: v });
+        return;
+      }
+      if (e.a === MINILAB3.modCC) store.patch({ vibe: e.b / 127 });
+    }
+  });
+  await midi.init();
+
+  // ---- computer-keyboard fallback ----
+  const KEYMAP: Record<string, number> = {
+    a: 60, w: 61, s: 62, e: 63, d: 64, f: 65, t: 66, g: 67,
+    y: 68, h: 69, u: 70, j: 71, k: 72, o: 73, l: 74, p: 75, ';': 76,
+  };
+  let kbOctave = 0;
+  window.addEventListener('keydown', (ev) => {
+    if (ev.repeat) return;
+    if ((ev.target as HTMLElement)?.tagName === 'INPUT' || (ev.target as HTMLElement)?.tagName === 'SELECT') return;
+    const key = ev.key.toLowerCase();
+    if (key in KEYMAP) { noteOn(KEYMAP[key] + kbOctave * 12, 0.9); return; }
+    if (key >= '1' && key <= '8') { padHit(Number(key) - 1, 1); return; }
+    if (key === ' ') { ev.preventDefault(); togglePlay(); return; }
+    if (key === 'r' && ev.shiftKey) { store.patch({ recording: !store.state.recording }); return; }
+    if (key === 'z') { kbOctave = Math.max(-2, kbOctave - 1); ui.toast(`octave ${kbOctave}`); return; }
+    if (key === 'x') { kbOctave = Math.min(2, kbOctave + 1); ui.toast(`octave ${kbOctave}`); return; }
+    if (key === 'arrowright' || key === 'arrowleft') {
+      const modes: Mode[] = ['chord', 'beat', 'tape'];
+      const d = key === 'arrowright' ? 1 : -1;
+      setMode(modes[(modes.indexOf(store.state.mode) + d + 3) % 3]);
+    }
+  });
+  window.addEventListener('keyup', (ev) => {
+    const key = ev.key.toLowerCase();
+    if (key in KEYMAP) noteOff(KEYMAP[key] + kbOctave * 12);
+  });
+
+  ui.update();
+  syncHardware(store.state);
+}
+
+function pct(v: number) { return Math.round(v * 100) + '%'; }
+function stamp() {
+  const d = new Date();
+  return `${d.getMonth() + 1}${d.getDate()}-${d.getHours()}${String(d.getMinutes()).padStart(2, '0')}`;
+}

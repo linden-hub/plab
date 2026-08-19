@@ -1,0 +1,238 @@
+/* PLAYLAB — minimalist black & white, playful color only where things are alive.
+   Per-mode accent: CHORD violet, BEAT coral, TAPE teal. */
+
+:root {
+  --ink: #101010;
+  --paper: #ffffff;
+  --mist: #f2f2f0;
+  --line: #e3e3e0;
+  --dim: #8a8a86;
+  --chord: #6a4dff;
+  --beat: #ff4d29;
+  --tape: #00a894;
+  --rec: #e5322e;
+  --accent: var(--chord);
+  --radius: 14px;
+}
+
+body[data-mode="chord"] { --accent: var(--chord); }
+body[data-mode="beat"] { --accent: var(--beat); }
+body[data-mode="tape"] { --accent: var(--tape); }
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body { height: 100%; }
+
+body {
+  background: var(--paper);
+  color: var(--ink);
+  font-family: "SF Mono", ui-monospace, "JetBrains Mono", Menlo, monospace;
+  font-size: 13px;
+  -webkit-font-smoothing: antialiased;
+}
+
+#app { max-width: 1060px; margin: 0 auto; padding: 20px 24px 80px; }
+
+button {
+  font: inherit;
+  color: inherit;
+  background: var(--paper);
+  border: 1.5px solid var(--ink);
+  border-radius: 10px;
+  padding: 6px 12px;
+  cursor: pointer;
+  transition: transform 0.06s ease, background 0.12s ease;
+}
+button:hover { background: var(--mist); }
+button:active { transform: scale(0.96); }
+button.primary { background: var(--ink); color: var(--paper); }
+button.lit { background: var(--accent); border-color: var(--accent); color: #fff; }
+button.rec-lit { background: var(--rec); border-color: var(--rec); color: #fff; animation: pulse 1s infinite; }
+
+@keyframes pulse { 50% { opacity: 0.6; } }
+
+select, input[type="text"] {
+  font: inherit;
+  border: 1.5px solid var(--ink);
+  border-radius: 10px;
+  padding: 5px 8px;
+  background: var(--paper);
+}
+
+input[type="range"] { accent-color: var(--accent); }
+
+/* ---------- header ---------- */
+
+header {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  padding-bottom: 16px;
+  border-bottom: 2px solid var(--ink);
+  margin-bottom: 18px;
+}
+
+.logo { font-size: 20px; font-weight: 800; letter-spacing: 3px; }
+.logo em { font-style: normal; color: var(--accent); }
+
+.pill {
+  border: 1.5px solid var(--line);
+  border-radius: 999px;
+  padding: 4px 12px;
+  color: var(--dim);
+  font-size: 11px;
+}
+.pill.on { border-color: var(--tape); color: var(--tape); font-weight: 700; }
+
+.transport { display: flex; gap: 8px; align-items: center; margin-left: auto; }
+
+.bpm { display: flex; align-items: center; gap: 6px; }
+.bpm input { width: 64px; }
+
+/* ---------- mode tabs ---------- */
+
+.tabs { display: flex; gap: 10px; margin-bottom: 18px; }
+.tabs button {
+  flex: 1;
+  padding: 14px;
+  font-size: 15px;
+  font-weight: 800;
+  letter-spacing: 2px;
+  border-radius: var(--radius);
+  border-width: 2px;
+  border-color: var(--line);
+  color: var(--dim);
+}
+.tabs button.active { border-color: var(--accent); color: var(--accent); background: var(--paper); }
+.tabs button .sub { display: block; font-size: 10px; font-weight: 400; letter-spacing: 0.5px; margin-top: 3px; }
+
+/* ---------- panels ---------- */
+
+.panel { border: 2px solid var(--ink); border-radius: var(--radius); padding: 18px; }
+.row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+.row + .row { margin-top: 14px; }
+.spacer { flex: 1; }
+label.ctl { display: flex; flex-direction: column; gap: 4px; font-size: 11px; color: var(--dim); }
+label.ctl b { color: var(--ink); font-size: 11px; letter-spacing: 1px; }
+
+/* chord display */
+.chord-now {
+  font-size: 42px;
+  font-weight: 800;
+  min-height: 56px;
+  letter-spacing: 1px;
+}
+.chord-now .roman { color: var(--accent); }
+.chord-now.empty { color: var(--line); }
+
+.keychips { display: flex; gap: 5px; flex-wrap: wrap; }
+.keychips button { padding: 5px 0; width: 34px; border-radius: 8px; border-color: var(--line); color: var(--dim); }
+.keychips button.active { border-color: var(--accent); background: var(--accent); color: #fff; }
+
+/* on-screen keyboard */
+.kb { position: relative; height: 130px; margin-top: 16px; user-select: none; }
+.kb .white, .kb .black { position: absolute; border: 1.5px solid var(--ink); border-radius: 0 0 8px 8px; cursor: pointer; }
+.kb .white { background: var(--paper); top: 0; bottom: 0; z-index: 1; }
+.kb .black { background: var(--ink); top: 0; height: 58%; z-index: 2; border-radius: 0 0 6px 6px; }
+.kb .white.held { background: var(--accent); border-color: var(--accent); }
+.kb .black.held { background: var(--accent); border-color: var(--accent); }
+.kb .deg { position: absolute; bottom: 6px; width: 100%; text-align: center; font-size: 10px; color: var(--dim); pointer-events: none; }
+.kb .white.held .deg { color: #fff; }
+
+/* step grid */
+.grid { display: grid; grid-template-columns: 64px repeat(16, 1fr); gap: 4px; margin-top: 6px; }
+.grid .tname { font-size: 10px; letter-spacing: 1px; color: var(--dim); display: flex; align-items: center; cursor: pointer; }
+.grid .tname.sel { color: var(--ink); font-weight: 800; }
+.grid .cell {
+  aspect-ratio: 1;
+  border: 1.5px solid var(--line);
+  border-radius: 6px;
+  cursor: pointer;
+  background: var(--paper);
+}
+.grid .cell:nth-child(16n + 6), .grid .cell:nth-child(16n + 10), .grid .cell:nth-child(16n + 14) { }
+.grid .cell.q { border-color: #cfcfcb; }
+.grid .cell.on { background: var(--ink); border-color: var(--ink); }
+.grid .cell.on.playing { background: var(--beat); border-color: var(--beat); }
+.grid .cell.playing { border-color: var(--beat); }
+
+/* pads mirror */
+.pads { display: grid; grid-template-columns: repeat(8, 1fr); gap: 8px; margin-top: 14px; }
+.pads button {
+  aspect-ratio: 1.6;
+  border-radius: 12px;
+  border: 2px solid var(--line);
+  font-size: 10px;
+  letter-spacing: 1px;
+  color: var(--dim);
+}
+.pads button.hit { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+/* tape */
+.reels { display: flex; align-items: center; gap: 18px; }
+.reel {
+  width: 74px; height: 74px;
+  border: 2.5px solid var(--ink);
+  border-radius: 50%;
+  position: relative;
+}
+.reel::after {
+  content: "";
+  position: absolute; inset: 26px;
+  border: 2.5px solid var(--ink);
+  border-radius: 50%;
+}
+.reel .spoke {
+  position: absolute; left: 50%; top: 4px; bottom: 4px; width: 2.5px;
+  background: var(--ink); transform-origin: center;
+}
+.reel.spin { }
+.layers { display: flex; gap: 6px; }
+.layer-chip {
+  width: 26px; height: 26px; border-radius: 8px;
+  border: 2px solid var(--tape);
+  background: color-mix(in srgb, var(--tape) 30%, white);
+}
+.tape-status { font-size: 15px; font-weight: 700; }
+.tape-status.rec { color: var(--rec); }
+
+/* hardware mirror strip */
+.hw { display: flex; gap: 8px; margin-top: 18px; flex-wrap: wrap; }
+.hw .k {
+  border: 1.5px solid var(--line);
+  border-radius: 10px;
+  padding: 6px 8px;
+  min-width: 74px;
+  font-size: 10px;
+  color: var(--dim);
+}
+.hw .k b { display: block; color: var(--ink); font-size: 12px; margin-top: 2px; }
+.hw .k .bar { height: 3px; background: var(--mist); border-radius: 2px; margin-top: 4px; overflow: hidden; }
+.hw .k .bar i { display: block; height: 100%; background: var(--accent); }
+
+footer { margin-top: 22px; color: var(--dim); font-size: 11px; line-height: 1.7; }
+footer kbd {
+  border: 1px solid var(--line); border-bottom-width: 2px;
+  border-radius: 4px; padding: 0 4px; font-size: 10px;
+}
+
+.toast {
+  position: fixed; left: 50%; bottom: 26px; transform: translateX(-50%);
+  background: var(--ink); color: var(--paper);
+  padding: 10px 18px; border-radius: 999px; font-size: 12px;
+  opacity: 0; pointer-events: none; transition: opacity 0.25s;
+  z-index: 50;
+}
+.toast.show { opacity: 1; }
+
+/* start overlay — browsers require a gesture before audio */
+.overlay {
+  position: fixed; inset: 0; background: var(--paper);
+  display: flex; flex-direction: column; gap: 18px;
+  align-items: center; justify-content: center; z-index: 100;
+}
+.overlay h1 { font-size: 34px; letter-spacing: 6px; }
+.overlay h1 em { font-style: normal; color: var(--chord); }
+.overlay p { color: var(--dim); max-width: 420px; text-align: center; line-height: 1.6; }
+.overlay button { font-size: 16px; padding: 14px 34px; border-radius: 999px; }
