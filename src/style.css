@@ -162,6 +162,32 @@ label.ctl b { color: var(--ink); font-size: 11px; letter-spacing: 1px; }
 .kb .deg { position: absolute; bottom: 6px; width: 100%; text-align: center; font-size: 10px; color: var(--dim); pointer-events: none; }
 .kb .white.held .deg { color: #fff; }
 
+/* CHORD mode: keys are color-grouped by harmonic function — same color =
+   chords that substitute for each other (HOME I III VI · AWAY II IV · PULL V VII). */
+[data-fn="home"] { --fnc: var(--chord); }
+[data-fn="away"] { --fnc: var(--tape); }
+[data-fn="pull"] { --fnc: var(--beat); }
+body[data-kb="chord"] .kb .white::before {
+  content: ''; position: absolute; left: 18%; right: 18%; bottom: 22px;
+  height: 5px; border-radius: 3px; background: var(--fnc);
+}
+body[data-kb="chord"] .kb .black::before {
+  content: ''; position: absolute; left: 20%; right: 20%; bottom: 7px;
+  height: 4px; border-radius: 2px; background: var(--fnc); opacity: 0.9;
+}
+body[data-kb="chord"] .kb .white .deg { color: var(--fnc); font-weight: 700; }
+body[data-kb="chord"] .kb .white.held::before,
+body[data-kb="chord"] .kb .black.held::before { background: #fff; }
+body[data-kb="chord"] .kb .white.held .deg { color: #fff; }
+body[data-kb="chord"] .kb .white.held, body[data-kb="chord"] .kb .black.held {
+  background: var(--fnc); border-color: var(--fnc);
+}
+.chord-now[data-fn] .roman { color: var(--fnc); }
+
+.fn-legend { display: flex; gap: 16px; align-items: baseline; font-size: 11px; color: var(--dim); letter-spacing: 0.04em; }
+.fn-legend span[data-fn]::before { content: '●'; margin-right: 5px; color: var(--fnc); }
+.fn-legend .fn-hint { margin-left: auto; letter-spacing: 0; font-size: 10px; opacity: 0.75; }
+
 /* step grid */
 .grid { display: grid; grid-template-columns: 64px repeat(16, 1fr); gap: 4px; margin-top: 6px; }
 .grid .tname { font-size: 10px; letter-spacing: 1px; color: var(--dim); display: flex; align-items: center; cursor: pointer; }

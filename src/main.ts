@@ -180,6 +180,7 @@ async function boot() {
     },
     learning: () => learnTarget,
     currentChordLabel: () => chord.current?.label ?? null,
+    currentChordDegree: () => chord.current?.degree ?? null,
     heldNotes: () => held,
   }, app);
 

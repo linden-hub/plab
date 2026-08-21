@@ -4,7 +4,7 @@
 
 import type { AppState, Keyboard, SynthPresetName } from '../state';
 import { NUM_STEPS, NUM_TRACKS, TRACK_NAMES } from '../state';
-import { NOTE_NAMES, SCALE_LIST } from '../theory/harmony';
+import { NOTE_NAMES, SCALE_LIST, DEGREE_FUNCTION, keyToDegree } from '../theory/harmony';
 
 export interface UIHooks {
   state(): AppState;
@@ -46,6 +46,7 @@ export interface UIHooks {
   learnKnob(i: number): void;
   learning(): number | null;
   currentChordLabel(): string | null;
+  currentChordDegree(): number | null;
   heldNotes(): Set<number>;
 }
 
@@ -185,7 +186,13 @@ export class UI {
     const arpT = button('ARP', () => h.patch({ arpOn: !h.state().arpOn }));
     this.els.bassT = bassT; this.els.arpT = arpT;
     keyRow.append(chips, scaleSel, el('span', 'spacer'), bassT, arpT);
-    chordPanel.append(chordNow, keyRow, this.buildKeyboard());
+    const fnLegend = el('div', 'fn-legend');
+    fnLegend.innerHTML =
+      `<span data-fn="home">HOME · I III VI</span>` +
+      `<span data-fn="away">AWAY · II IV</span>` +
+      `<span data-fn="pull">PULL · V VII</span>` +
+      `<span class="fn-hint">same color = swappable · pull wants to land home</span>`;
+    chordPanel.append(chordNow, keyRow, fnLegend, this.buildKeyboard());
     this.els.chordPanel = chordPanel;
 
     // ---- JAMMI panel ----
@@ -305,6 +312,7 @@ export class UI {
       key.addEventListener('pointerup', up);
       key.addEventListener('pointerleave', up);
       key.dataset.note = String(note);
+      key.dataset.fn = DEGREE_FUNCTION[keyToDegree(note).degree];
       kb.appendChild(key);
     }
     return kb;
@@ -425,9 +433,12 @@ export class UI {
         const [nm, roman] = label.split('·');
         this.els.chordNow.innerHTML = `${nm.trim()} <span class="roman">${(roman ?? '').trim()}</span>`;
         this.els.chordNow.classList.remove('empty');
+        const deg = h.currentChordDegree();
+        if (deg !== null) this.els.chordNow.dataset.fn = DEGREE_FUNCTION[deg];
       } else {
         this.els.chordNow.textContent = 'play a key…';
         this.els.chordNow.classList.add('empty');
+        delete this.els.chordNow.dataset.fn;
       }
     }
 

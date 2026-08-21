@@ -27,6 +27,13 @@ export interface ChordSpec {
 
 const ROMAN = ['I', 'II', 'III', 'IV', 'V', 'VI', 'VII'];
 
+// Functional-harmony families: chords in the same family substitute for each
+// other, so the keyboard color-codes them as one group. HOME rests (tonic:
+// I III VI), AWAY steps out (subdominant: II IV), PULL leans back toward home
+// (dominant: V VII).
+export type ChordFunction = 'home' | 'away' | 'pull';
+export const DEGREE_FUNCTION: ChordFunction[] = ['home', 'away', 'home', 'away', 'pull', 'home', 'pull'];
+
 export interface VoicingOptions {
   extension: number;     // 0 = triad, 1 = add diatonic 7th, 2 = add 7th + 9th (Nopia extensions dial)
   spread: number;        // 0..1 — 0 = close voicing, 1 = wide open voicing
