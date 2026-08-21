@@ -20,6 +20,11 @@ import { UI } from './ui/ui';
 
 const app = document.getElementById('app')!;
 
+// K7 ARP speeds, slow → fast, in clock steps (16ths) per arp note.
+const ARP_RATES = [8, 6, 4, 3, 2, 1];
+const ARP_LABELS = ['1/2', '1/4·', '1/4', '8th·', '8th', '16th'];
+const arpIndex = (rate: number) => Math.max(0, ARP_RATES.indexOf(rate));
+
 // Browsers require a user gesture before audio — a friendly front door.
 const overlay = document.createElement('div');
 overlay.className = 'overlay';
@@ -349,7 +354,7 @@ async function boot() {
         { get: () => (s.chordOctave / 12 + 2) / 4, set: (v) => P({ chordOctave: (Math.round(v * 4) - 2) * 12 }), steps: 5 },
         common.bright,
         common.release,
-        { get: () => [4, 2, 1].indexOf(s.arpRate) / 2, set: (v) => P({ arpRate: [4, 2, 1][Math.min(2, Math.floor(v * 3))] }), steps: 3 },
+        { get: () => arpIndex(s.arpRate) / (ARP_RATES.length - 1), set: (v) => P({ arpRate: ARP_RATES[Math.round(v * (ARP_RATES.length - 1))] }), steps: ARP_RATES.length },
         common.vibe,
       ];
     }
@@ -471,7 +476,7 @@ async function boot() {
         { label: 'OCT', value: String(s.chordOctave / 12), norm: (s.chordOctave / 12 + 2) / 4 },
         common.bright,
         common.release,
-        { label: 'ARP', value: s.arpRate === 1 ? '16th' : s.arpRate === 2 ? '8th' : '1/4', norm: 1 - (s.arpRate - 1) / 3 },
+        { label: 'ARP', value: ARP_LABELS[arpIndex(s.arpRate)], norm: arpIndex(s.arpRate) / (ARP_RATES.length - 1) },
         common.vibe,
       ];
     }
