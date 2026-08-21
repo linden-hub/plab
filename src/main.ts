@@ -384,7 +384,7 @@ async function boot() {
   // step units outside the param itself, because set() rounds to the nearest
   // position and would swallow sub-position fractions.
   const REL_STEP = 0.006;
-  const DETENTS_PER_TURN = 24;
+  const DETENTS_PER_TURN = 48;
   const stepAccum = new Array<number>(8).fill(0);
   function onKnobRel(i: number, delta: number) {
     const d = knobDefs()[i];
