@@ -19,6 +19,14 @@ export class ChordMode {
   private held = new Map<number, ChordSpec>();
   current: ChordSpec | null = null;
 
+  // Overlapping chords share notes (a black key = same degree as its white
+  // neighbor plus a 7th), so sounding notes are reference-counted and only
+  // released when the LAST chord using them lets go.
+  private chordCount = new Map<number, number>();
+  private bassCount = new Map<number, number>();
+  /** Source keys that triggered a bass note (bassOn can toggle mid-hold). */
+  private heldBass = new Set<number>();
+
   private arpIndex = 0;
 
   /** Chord performance log for MIDI export (beats relative to transport start). */
@@ -73,12 +81,17 @@ export class ChordMode {
     this.applyMacros();
 
     for (const n of spec.notes) {
+      const c = this.chordCount.get(n) ?? 0;
+      this.chordCount.set(n, c + 1);
       this.chords.noteOn(n, vel, now);
-      this.logOn(n, vel, 0);
+      if (c === 0) this.logOn(n, vel, 0);
     }
     if (s.bassOn) {
+      this.heldBass.add(midiNote);
+      const c = this.bassCount.get(spec.bass) ?? 0;
+      this.bassCount.set(spec.bass, c + 1);
       this.bassSynth.noteOn(spec.bass, Math.min(1, vel + 0.1), now);
-      this.logOn(spec.bass, vel, 1);
+      if (c === 0) this.logOn(spec.bass, vel, 1);
     }
   }
 
@@ -87,17 +100,34 @@ export class ChordMode {
     if (!spec) return;
     this.held.delete(midiNote);
     for (const n of spec.notes) {
-      this.chords.noteOff(n, now);
-      this.logOff(n, 0);
+      const c = (this.chordCount.get(n) ?? 1) - 1;
+      if (c <= 0) {
+        this.chordCount.delete(n);
+        this.chords.noteOff(n, now);
+        this.logOff(n, 0);
+      } else {
+        this.chordCount.set(n, c);
+      }
     }
-    this.bassSynth.noteOff(spec.bass, now);
-    this.logOff(spec.bass, 1);
+    if (this.heldBass.delete(midiNote)) {
+      const c = (this.bassCount.get(spec.bass) ?? 1) - 1;
+      if (c <= 0) {
+        this.bassCount.delete(spec.bass);
+        this.bassSynth.noteOff(spec.bass, now);
+        this.logOff(spec.bass, 1);
+      } else {
+        this.bassCount.set(spec.bass, c);
+      }
+    }
     if (this.held.size === 0) this.arpIndex = 0;
     else this.current = [...this.held.values()].pop()!;
   }
 
   allOff(now: number) {
     this.held.clear();
+    this.chordCount.clear();
+    this.bassCount.clear();
+    this.heldBass.clear();
     this.chords.allOff(now);
     this.bassSynth.allOff(now);
     this.arpSynth.allOff(now);
