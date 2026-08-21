@@ -186,6 +186,7 @@ async function boot() {
 
   // ---- store side effects ----
   store.subscribe((s, changed) => {
+    if (changed.has('keyboard')) stepAccum.fill(0);
     if (changed.has('bpm')) clock.bpm = s.bpm;
     if (changed.has('swing')) clock.swing = s.swing;
     if (changed.has('vibe')) engine.setVibe(s.vibe);
@@ -358,7 +359,7 @@ async function boot() {
         { get: () => (s.bpm - 60) / 120, set: (v) => P({ bpm: Math.round(60 + v * 120) }) },
         { get: () => s.swing, set: (v) => P({ swing: v }) },
         { get: () => tp().volume, set: (v) => { tp().volume = v; store.touch('grid'); } },
-        { get: () => (tp().pitch + 12) / 24, set: (v) => { tp().pitch = Math.round(v * 24) - 12; store.touch('grid'); } },
+        { get: () => (tp().pitch + 12) / 24, set: (v) => { tp().pitch = Math.round(v * 24) - 12; store.touch('grid'); }, steps: 25 },
         { get: () => tp().decay, set: (v) => { tp().decay = v; store.touch('grid'); } },
         common.vibe,
         common.delay,
@@ -378,18 +379,27 @@ async function boot() {
   function onKnobAbs(i: number, value: number) { knobDefs()[i]?.set(value / 127); }
 
   // Relative tuning: ~0.6% per detent for continuous params (fast spins get a
-  // capped speed bonus from the Mackie magnitude); quantized params move
-  // exactly one position per detent.
+  // capped speed bonus from the Mackie magnitude). Quantized params spread
+  // their whole range over ~one full physical rotation: detents accumulate in
+  // step units outside the param itself, because set() rounds to the nearest
+  // position and would swallow sub-position fractions.
   const REL_STEP = 0.006;
+  const DETENTS_PER_TURN = 24;
+  const stepAccum = new Array<number>(8).fill(0);
   function onKnobRel(i: number, delta: number) {
     const d = knobDefs()[i];
     if (!d || delta === 0) return;
     ui.knobFlash(i);
+    const capped = Math.sign(delta) * Math.min(4, Math.abs(delta));
     if (d.steps) {
-      const idx = Math.round(d.get() * (d.steps - 1)) + (delta > 0 ? 1 : -1);
-      d.set(Math.max(0, Math.min(d.steps - 1, idx)) / (d.steps - 1));
+      stepAccum[i] += capped * (d.steps - 1) / DETENTS_PER_TURN;
+      const move = Math.trunc(stepAccum[i]);
+      if (move !== 0) {
+        stepAccum[i] -= move;
+        const idx = Math.round(d.get() * (d.steps - 1)) + move;
+        d.set(Math.max(0, Math.min(d.steps - 1, idx)) / (d.steps - 1));
+      }
     } else {
-      const capped = Math.sign(delta) * Math.min(4, Math.abs(delta));
       d.set(clamp01(d.get() + capped * REL_STEP));
     }
   }

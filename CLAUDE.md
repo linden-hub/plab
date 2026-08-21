@@ -39,7 +39,9 @@ sound design. Long-term: port to a portable hardware unit. Repo: github.com/lind
   in `src/midi/minilab3.ts`.
 - Knob MIDI-learn: click a K-box then turn a knob; bindings in localStorage `plab.knobmap.v1`.
 - Relative knob tuning: 0.6%/detent, magnitude cap 4 (`REL_STEP` in main.ts — user is
-  sensitive to this feel); quantized params (`steps` on KnobDef) move one position per detent.
+  sensitive to this feel); quantized params (`steps` on KnobDef) spread their full range
+  over ~one rotation (`DETENTS_PER_TURN`), accumulating fractional detents in `stepAccum`
+  because set() rounds and would swallow sub-position moves.
 
 ## Conventions & gotchas
 
